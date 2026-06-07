@@ -310,6 +310,8 @@
       <label class="option-item"><input type="checkbox" id="opt-policies" checked> Policies</label>
       <label class="option-item"><input type="checkbox" id="opt-files" checked> Files/Images</label>
       <label class="option-item"><input type="checkbox" id="opt-theme" checked> Theme</label>
+      <label class="option-item"><input type="checkbox" id="opt-markets" checked> 🌍 Markets</label>
+      <label class="option-item"><input type="checkbox" id="opt-shipping" checked> 🚚 Shipping</label>
     </div>
   </div>
 
@@ -394,6 +396,8 @@ async function startClone() {
     policies: document.getElementById('opt-policies').checked,
     files: document.getElementById('opt-files').checked,
     theme: document.getElementById('opt-theme').checked,
+    markets: document.getElementById('opt-markets').checked,
+    shipping: document.getElementById('opt-shipping').checked,
   };
 
   const btn = document.getElementById('btn-clone');
