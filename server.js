@@ -393,6 +393,172 @@ app.post("/api/clone", async (req, res) => {
       }
     }
 
+    // ==== MARKETS GLOBAIS ====
+    if (options.markets) {
+      log("━━━━━━━━━━ ETAPA 9: MARKETS GLOBAIS ━━━━━━━━━━");
+
+      const PAISES_MARKETS = [
+        {code:"DE",name:"Germany"},{code:"FR",name:"France"},{code:"IT",name:"Italy"},{code:"ES",name:"Spain"},
+        {code:"PT",name:"Portugal"},{code:"NL",name:"Netherlands"},{code:"BE",name:"Belgium"},{code:"AT",name:"Austria"},
+        {code:"IE",name:"Ireland"},{code:"LU",name:"Luxembourg"},{code:"GR",name:"Greece"},{code:"FI",name:"Finland"},
+        {code:"GB",name:"United Kingdom"},{code:"CH",name:"Switzerland"},{code:"SE",name:"Sweden"},{code:"NO",name:"Norway"},
+        {code:"DK",name:"Denmark"},{code:"PL",name:"Poland"},{code:"CZ",name:"Czech Republic"},{code:"HU",name:"Hungary"},
+        {code:"RO",name:"Romania"},{code:"BG",name:"Bulgaria"},{code:"HR",name:"Croatia"},{code:"SK",name:"Slovakia"},
+        {code:"CY",name:"Cyprus"},{code:"EE",name:"Estonia"},{code:"LV",name:"Latvia"},{code:"LT",name:"Lithuania"},
+        {code:"SI",name:"Slovenia"},{code:"MT",name:"Malta"},
+        {code:"US",name:"United States"},{code:"CA",name:"Canada"},{code:"MX",name:"Mexico"},
+        {code:"BR",name:"Brazil"},{code:"AR",name:"Argentina"},{code:"CL",name:"Chile"},{code:"CO",name:"Colombia"},
+        {code:"PE",name:"Peru"},{code:"UY",name:"Uruguay"},{code:"EC",name:"Ecuador"},
+        {code:"JP",name:"Japan"},{code:"KR",name:"South Korea"},{code:"SG",name:"Singapore"},
+        {code:"HK",name:"Hong Kong"},{code:"TW",name:"Taiwan"},{code:"AU",name:"Australia"},{code:"NZ",name:"New Zealand"},
+        {code:"CN",name:"China"},{code:"IN",name:"India"},{code:"TH",name:"Thailand"},
+        {code:"AE",name:"UAE"},{code:"IL",name:"Israel"},{code:"SA",name:"Saudi Arabia"},
+        {code:"ZA",name:"South Africa"},{code:"MA",name:"Morocco"},{code:"TR",name:"Turkey"},
+      ];
+
+      // Lista países já em markets
+      const existingCountries = new Set();
+      try {
+        const mData = await gql(destination.shop, `query{markets(first:100){edges{node{regions(first:100){edges{node{...on MarketRegionCountry{code}}}}}}}}`, {}, tokenDest);
+        for (const e of mData.markets.edges) for (const r of e.node.regions.edges) if (r.node.code) existingCountries.add(r.node.code);
+      } catch {}
+
+      const novos = PAISES_MARKETS.filter(p => !existingCountries.has(p.code));
+      log(`🌍 ${existingCountries.size} países já cobertos | ${novos.length} a criar`);
+
+      let mkCriados = 0;
+      for (let i = 0; i < novos.length; i++) {
+        const p = novos[i];
+        progress("markets", i + 1, novos.length);
+        try {
+          const r = await gql(destination.shop, `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id}userErrors{field message}}}`,
+            { input: { name: p.name, enabled: true, regions: [{ countryCode: p.code }] } }, tokenDest);
+          if (r.marketCreate.userErrors.length === 0) {
+            mkCriados++;
+            // Tenta ativar moeda local
+            try {
+              await gql(destination.shop, `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
+                { id: r.marketCreate.market.id, i: { localCurrencies: true } }, tokenDest);
+            } catch {}
+          }
+        } catch {}
+        await sleep(400);
+      }
+      log(`✅ Markets: ${mkCriados} criados | ${existingCountries.size} já existiam`, "success");
+    }
+
+    // ==== FRETES POR PAÍS ====
+    if (options.shipping) {
+      log("━━━━━━━━━━ ETAPA 10: FRETES POR PAÍS ━━━━━━━━━━");
+
+      const FRETES = {
+        DE:{std:{name:"DHL Standard",desc:"Lieferung in 5 bis 8 Werktagen"},pri:{name:"DHL Express",desc:"Lieferung in 3 bis 7 Werktagen"}},
+        FR:{std:{name:"Colissimo Standard",desc:"Livraison en 5 à 8 jours ouvrables"},pri:{name:"Chronopost Express",desc:"Livraison en 3 à 7 jours ouvrables"}},
+        IT:{std:{name:"Poste Italiane Standard",desc:"Consegna in 5-8 giorni lavorativi"},pri:{name:"Poste Italiane Express",desc:"Consegna in 3-7 giorni lavorativi"}},
+        ES:{std:{name:"Correos Estándar",desc:"Entrega en 5 a 8 días laborables"},pri:{name:"Correos Express",desc:"Entrega en 3 a 7 días laborables"}},
+        PT:{std:{name:"CTT Standard",desc:"Entrega em 5 a 8 dias úteis"},pri:{name:"CTT Expresso",desc:"Entrega em 3 a 7 dias úteis"}},
+        NL:{std:{name:"PostNL Standard",desc:"Bezorging in 5 tot 8 werkdagen"},pri:{name:"PostNL Express",desc:"Bezorging in 3 tot 7 werkdagen"}},
+        BE:{std:{name:"Bpost Standard",desc:"Livraison en 5 à 8 jours ouvrables"},pri:{name:"Bpost Express",desc:"Livraison en 3 à 7 jours ouvrables"}},
+        AT:{std:{name:"Österreichische Post Standard",desc:"Lieferung in 5 bis 8 Werktagen"},pri:{name:"Österreichische Post Express",desc:"Lieferung in 3 bis 7 Werktagen"}},
+        IE:{std:{name:"An Post Standard",desc:"Delivery in 5 to 8 business days"},pri:{name:"An Post Express",desc:"Delivery in 3 to 7 business days"}},
+        LU:{std:{name:"Post Luxembourg Standard",desc:"Livraison en 5 à 8 jours ouvrables"},pri:{name:"Post Luxembourg Express",desc:"Livraison en 3 à 7 jours ouvrables"}},
+        GR:{std:{name:"ELTA Standard",desc:"Παράδοση σε 5 έως 8 εργάσιμες ημέρες"},pri:{name:"ELTA Courier",desc:"Παράδοση σε 3 έως 7 εργάσιμες ημέρες"}},
+        FI:{std:{name:"Posti Standard",desc:"Toimitus 5–8 työpäivässä"},pri:{name:"Posti Express",desc:"Toimitus 3–7 työpäivässä"}},
+        GB:{std:{name:"Royal Mail Tracked",desc:"Delivery in 5 to 8 business days"},pri:{name:"Royal Mail Tracked 24",desc:"Delivery in 3 to 7 business days"}},
+        CH:{std:{name:"Swiss Post Economy",desc:"Lieferung in 5 bis 8 Werktagen"},pri:{name:"Swiss Post Priority",desc:"Lieferung in 3 bis 7 Werktagen"}},
+        SE:{std:{name:"PostNord Standard",desc:"Leverans inom 5 till 8 arbetsdagar"},pri:{name:"PostNord Express",desc:"Leverans inom 3 till 7 arbetsdagar"}},
+        NO:{std:{name:"Posten Norge Standard",desc:"Levering på 5 til 8 virkedager"},pri:{name:"Posten Norge Express",desc:"Levering på 3 til 7 virkedager"}},
+        DK:{std:{name:"PostNord Standard",desc:"Levering på 5 til 8 hverdage"},pri:{name:"PostNord Express",desc:"Levering på 3 til 7 hverdage"}},
+        PL:{std:{name:"Poczta Polska Standard",desc:"Dostawa w 5 do 8 dni roboczych"},pri:{name:"InPost Express",desc:"Dostawa w 3 do 7 dni roboczych"}},
+        CZ:{std:{name:"Česká pošta Standard",desc:"Doručení za 5 až 8 pracovních dnů"},pri:{name:"Česká pošta Express",desc:"Doručení za 3 až 7 pracovních dnů"}},
+        HU:{std:{name:"Magyar Posta Standard",desc:"Kézbesítés 5–8 munkanapon belül"},pri:{name:"Magyar Posta Express",desc:"Kézbesítés 3–7 munkanapon belül"}},
+        RO:{std:{name:"Poșta Română Standard",desc:"Livrare în 5–8 zile lucrătoare"},pri:{name:"Poșta Română Express",desc:"Livrare în 3–7 zile lucrătoare"}},
+        BG:{std:{name:"Български пощи Стандарт",desc:"Доставка за 5 до 8 работни дни"},pri:{name:"Български пощи Експрес",desc:"Доставка за 3 до 7 работни дни"}},
+        HR:{std:{name:"Hrvatska pošta Standard",desc:"Dostava u roku od 5 do 8 radnih dana"},pri:{name:"Hrvatska pošta Express",desc:"Dostava u roku od 3 do 7 radnih dana"}},
+        SK:{std:{name:"Slovenská pošta Standard",desc:"Doručenie za 5 až 8 pracovných dní"},pri:{name:"Slovenská pošta Express",desc:"Doručenie za 3 až 7 pracovných dní"}},
+        US:{std:{name:"USPS Ground Advantage",desc:"Delivery in 5 to 8 business days"},pri:{name:"UPS Priority",desc:"Delivery in 3 to 7 business days"}},
+        CA:{std:{name:"Canada Post Regular",desc:"Delivery in 5 to 8 business days"},pri:{name:"Canada Post Xpresspost",desc:"Delivery in 3 to 7 business days"}},
+        MX:{std:{name:"Correos de México Estándar",desc:"Entrega en 5 a 8 días hábiles"},pri:{name:"Estafeta Express",desc:"Entrega en 3 a 7 días hábiles"}},
+        BR:{std:{name:"Correios PAC",desc:"Entrega em 5 a 8 dias úteis"},pri:{name:"Correios SEDEX",desc:"Entrega em 3 a 7 dias úteis"}},
+        AR:{std:{name:"Correo Argentino Estándar",desc:"Entrega en 5 a 8 días hábiles"},pri:{name:"Correo Argentino Express",desc:"Entrega en 3 a 7 días hábiles"}},
+        CL:{std:{name:"Correos de Chile Estándar",desc:"Entrega en 5 a 8 días hábiles"},pri:{name:"Correos de Chile Express",desc:"Entrega en 3 a 7 días hábiles"}},
+        CO:{std:{name:"4-72 Estándar",desc:"Entrega en 5 a 8 días hábiles"},pri:{name:"Servientrega Express",desc:"Entrega en 3 a 7 días hábiles"}},
+        PE:{std:{name:"Serpost Estándar",desc:"Entrega en 5 a 8 días hábiles"},pri:{name:"Serpost Express",desc:"Entrega en 3 a 7 días hábiles"}},
+        UY:{std:{name:"Correo Uruguayo Estándar",desc:"Entrega en 5 a 8 días hábiles"},pri:{name:"Correo Uruguayo Express",desc:"Entrega en 3 a 7 días hábiles"}},
+        EC:{std:{name:"Correos del Ecuador Estándar",desc:"Entrega en 5 a 8 días hábiles"},pri:{name:"Correos del Ecuador Express",desc:"Entrega en 3 a 7 días hábiles"}},
+        JP:{std:{name:"Japan Post Standard",desc:"5〜8営業日でお届け"},pri:{name:"Yamato Express",desc:"3〜7営業日でお届け"}},
+        KR:{std:{name:"Korea Post 일반",desc:"영업일 기준 5~8일 이내 배송"},pri:{name:"Korea Post 익일특급",desc:"영업일 기준 3~7일 이내 배송"}},
+        SG:{std:{name:"SingPost Standard",desc:"Delivery in 5 to 8 business days"},pri:{name:"SingPost Express",desc:"Delivery in 3 to 7 business days"}},
+        HK:{std:{name:"Hongkong Post Standard",desc:"5至8個工作天送達"},pri:{name:"SF Express",desc:"3至7個工作天送達"}},
+        TW:{std:{name:"中華郵政 Standard",desc:"5至8個工作天送達"},pri:{name:"中華郵政 Express",desc:"3至7個工作天送達"}},
+        AU:{std:{name:"Australia Post Standard",desc:"Delivery in 5 to 8 business days"},pri:{name:"Australia Post Express",desc:"Delivery in 3 to 7 business days"}},
+        NZ:{std:{name:"NZ Post Standard",desc:"Delivery in 5 to 8 business days"},pri:{name:"NZ Post Express",desc:"Delivery in 3 to 7 business days"}},
+        CN:{std:{name:"China Post 普通",desc:"5至8个工作日送达"},pri:{name:"SF Express 顺丰速运",desc:"3至7个工作日送达"}},
+        IN:{std:{name:"India Post Standard",desc:"Delivery in 5 to 8 business days"},pri:{name:"Blue Dart Express",desc:"Delivery in 3 to 7 business days"}},
+        TH:{std:{name:"ไปรษณีย์ไทย Standard",desc:"จัดส่งภายใน 5 ถึง 8 วันทำการ"},pri:{name:"ไปรษณีย์ไทย EMS",desc:"จัดส่งภายใน 3 ถึง 7 วันทำการ"}},
+        AE:{std:{name:"Emirates Post Standard",desc:"التسليم خلال 5 إلى 8 أيام عمل"},pri:{name:"Aramex Express",desc:"التسليم خلال 3 إلى 7 أيام عمل"}},
+        IL:{std:{name:"דואר ישראל סטנדרט",desc:"משלוח תוך 5 עד 8 ימי עסקים"},pri:{name:"דואר ישראל אקספרס",desc:"משלוח תוך 3 עד 7 ימי עסקים"}},
+        SA:{std:{name:"SPL سعودي بوست",desc:"التسليم خلال 5 إلى 8 أيام عمل"},pri:{name:"SPL Express",desc:"التسليم خلال 3 إلى 7 أيام عمل"}},
+        ZA:{std:{name:"SA Post Office Standard",desc:"Delivery in 5 to 8 business days"},pri:{name:"SA Post Office Express",desc:"Delivery in 3 to 7 business days"}},
+        MA:{std:{name:"Barid Al-Maghrib Standard",desc:"Livraison en 5 à 8 jours ouvrables"},pri:{name:"Barid Al-Maghrib Express",desc:"Livraison en 3 à 7 jours ouvrables"}},
+        TR:{std:{name:"PTT Standart",desc:"5 ila 8 iş günü içinde teslimat"},pri:{name:"PTT Hızlı",desc:"3 ila 7 iş günü içinde teslimat"}},
+      };
+
+      const TAXA_CAMBIO = {
+        EUR:1,USD:1.08,GBP:0.85,BRL:5.99,CHF:0.95,SEK:11.5,NOK:11.7,DKK:7.5,
+        PLN:4.3,CZK:25,HUF:395,RON:4.97,BGN:1.95,CAD:1.5,MXN:18,ARS:1000,
+        CLP:1000,COP:4500,PEN:4,UYU:43,JPY:170,KRW:1500,SGD:1.45,HKD:8.5,
+        TWD:35,AUD:1.65,NZD:1.78,CNY:7.8,AED:4,ILS:4,SAR:4,ZAR:20,MAD:11,
+        TRY:35,INR:90,THB:39,
+      };
+
+      // Descobre moeda da loja + delivery profile
+      const shopData = await gql(destination.shop, `query{shop{currencyCode}}`, {}, tokenDest);
+      const moedaLoja = shopData.shop.currencyCode;
+      const taxa = TAXA_CAMBIO[moedaLoja] || 1;
+      const precoStd = (4.90 * taxa).toFixed(2);
+      const precoPri = (9.70 * taxa).toFixed(2);
+
+      log(`💰 Moeda da loja: ${moedaLoja} | Standard: ${moedaLoja} ${precoStd} | Priority: ${moedaLoja} ${precoPri}`);
+
+      // Pega delivery profile
+      const profData = await gql(destination.shop, `query{deliveryProfiles(first:10){edges{node{id default profileLocationGroups{locationGroup{id}locationGroupZones(first:100){edges{node{zone{countries{code{countryCode}}}}}}}}}}`, {}, tokenDest);
+      const profile = profData.deliveryProfiles.edges.map(e=>e.node).find(p=>p.default);
+      if (!profile) { log("❌ Default delivery profile não encontrado", "error"); }
+      else {
+        const lg = profile.profileLocationGroups[0];
+        const paisesComFrete = new Set();
+        for (const ze of lg.locationGroupZones.edges)
+          for (const c of ze.node.zone.countries) if (c.code.countryCode) paisesComFrete.add(c.code.countryCode);
+
+        const fretesPaises = Object.keys(FRETES).filter(c => !paisesComFrete.has(c));
+        log(`🚚 ${paisesComFrete.size} países já têm frete | ${fretesPaises.length} a criar`);
+
+        let shCriados = 0;
+        for (let i = 0; i < fretesPaises.length; i++) {
+          const code = fretesPaises[i];
+          const frete = FRETES[code];
+          progress("shipping", i + 1, fretesPaises.length);
+          try {
+            await gql(destination.shop, `mutation deliveryProfileUpdate($id:ID!,$profile:DeliveryProfileInput!){deliveryProfileUpdate(id:$id,profile:$profile){profile{id}userErrors{field message}}}`, {
+              id: profile.id,
+              profile: { locationGroupsToUpdate: [{ id: lg.locationGroup.id, zonesToCreate: [{
+                name: code,
+                countries: [{ code, includeAllProvinces: true }],
+                methodDefinitionsToCreate: [
+                  { name: frete.std.name, description: frete.std.desc, active: true, rateDefinition: { price: { amount: precoStd, currencyCode: moedaLoja } } },
+                  { name: frete.pri.name, description: frete.pri.desc, active: true, rateDefinition: { price: { amount: precoPri, currencyCode: moedaLoja } } },
+                ],
+              }]}]}
+            }, tokenDest);
+            shCriados++;
+          } catch {}
+          await sleep(400);
+        }
+        log(`✅ Fretes: ${shCriados} países criados | Standard €4.90 | Priority €9.70`, "success");
+      }
+    }
+
     send("done", { msg: "🎉 Clonagem completa!" });
   } catch (err) {
     send("error", { msg: `💥 Erro fatal: ${err.message}` });

@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shopify Store Cloner</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a28;
+    --border: #2a2a3a;
+    --text: #e4e4ef;
+    --text2: #8888aa;
+    --accent: #6c5ce7;
+    --accent2: #a78bfa;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #eab308;
+    --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .container { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--accent2), var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle { color: var(--text2); margin-bottom: 32px; font-size: 14px; }
+
+  .stores-grid {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 32px;
+  }
+  .arrow-col {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    color: var(--accent);
+    padding-top: 30px;
+  }
+
+  .store-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+  }
+  .store-card h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .store-card h2 .badge {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-weight: 500;
+  }
+  .badge-origin { background: #22c55e22; color: var(--green); }
+  .badge-dest { background: #6c5ce722; color: var(--accent2); }
+
+  .field { margin-bottom: 12px; }
+  .field label {
+    display: block;
+    font-size: 12px;
+    color: var(--text2);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .field input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    transition: border-color 0.2s;
+    outline: none;
+  }
+  .field input:focus { border-color: var(--accent); }
+  .field input::placeholder { color: #555; }
+
+  .status-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-left: 8px;
+    background: #555;
+    transition: background 0.3s;
+  }
+  .status-dot.ok { background: var(--green); box-shadow: 0 0 8px #22c55e66; }
+  .status-dot.fail { background: var(--red); }
+
+  .shop-info {
+    font-size: 12px;
+    color: var(--text2);
+    margin-top: 8px;
+    min-height: 18px;
+  }
+
+  .options-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  .options-section h3 { font-size: 14px; margin-bottom: 16px; color: var(--text2); }
+  .options-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+  }
+  .option-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--surface2);
+    cursor: pointer;
+    transition: background 0.2s;
+    font-size: 13px;
+  }
+  .option-item:hover { background: #222238; }
+  .option-item input { accent-color: var(--accent); }
+
+  .btn {
+    padding: 12px 32px;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), #8b5cf6);
+    color: white;
+    width: 100%;
+    justify-content: center;
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 20px #6c5ce744; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn-sm {
+    padding: 8px 16px;
+    font-size: 12px;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-top: 8px;
+  }
+  .btn-sm:hover { border-color: var(--accent); }
+
+  .progress-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-top: 24px;
+    display: none;
+  }
+  .progress-section.active { display: block; }
+
+  .progress-bar-wrap {
+    height: 6px;
+    background: var(--surface2);
+    border-radius: 3px;
+    margin: 16px 0;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 3px;
+    width: 0%;
+    transition: width 0.3s;
+  }
+  .progress-label {
+    font-size: 12px;
+    color: var(--text2);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .log-area {
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.8;
+    margin-top: 16px;
+    padding: 12px;
+    background: var(--bg);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .log-area::-webkit-scrollbar { width: 6px; }
+  .log-area::-webkit-scrollbar-track { background: transparent; }
+  .log-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .log-line { white-space: pre-wrap; word-break: break-all; }
+  .log-line.success { color: var(--green); }
+  .log-line.error { color: var(--red); }
+  .log-line.info { color: var(--text2); }
+
+  .done-banner {
+    text-align: center;
+    padding: 24px;
+    background: #22c55e11;
+    border: 1px solid #22c55e33;
+    border-radius: var(--radius);
+    margin-top: 16px;
+    display: none;
+  }
+  .done-banner.active { display: block; }
+  .done-banner h3 { color: var(--green); font-size: 18px; margin-bottom: 8px; }
+
+  @media (max-width: 700px) {
+    .stores-grid { grid-template-columns: 1fr; }
+    .arrow-col { transform: rotate(90deg); padding: 0; }
+  }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="container">
+  <h1>🔄 Shopify Store Cloner</h1>
+  <p class="subtitle">Clone products, collections, pages, menus, theme, and files between stores</p>
+
+  <div class="stores-grid">
+    <!-- ORIGIN -->
+    <div class="store-card">
+      <h2>📤 Origin Store <span class="badge badge-origin">SOURCE</span>
+        <span class="status-dot" id="dot-origin"></span>
+      </h2>
+      <div class="field">
+        <label>Shop Domain</label>
+        <input id="orig-shop" placeholder="mystore.myshopify.com">
+      </div>
+      <div class="field">
+        <label>Client ID</label>
+        <input id="orig-id" placeholder="abc123...">
+      </div>
+      <div class="field">
+        <label>Client Secret</label>
+        <input id="orig-secret" type="password" placeholder="shpss_...">
+      </div>
+      <button class="btn btn-sm" onclick="testAuth('origin')">Test Connection</button>
+      <div class="shop-info" id="info-origin"></div>
+    </div>
+
+    <div class="arrow-col">→</div>
+
+    <!-- DESTINATION -->
+    <div class="store-card">
+      <h2>📥 Destination Store <span class="badge badge-dest">TARGET</span>
+        <span class="status-dot" id="dot-dest"></span>
+      </h2>
+      <div class="field">
+        <label>Shop Domain</label>
+        <input id="dest-shop" placeholder="newstore.myshopify.com">
+      </div>
+      <div class="field">
+        <label>Client ID</label>
+        <input id="dest-id" placeholder="abc123...">
+      </div>
+      <div class="field">
+        <label>Client Secret</label>
+        <input id="dest-secret" type="password" placeholder="shpss_...">
+      </div>
+      <button class="btn btn-sm" onclick="testAuth('dest')">Test Connection</button>
+      <div class="shop-info" id="info-dest"></div>
+    </div>
+  </div>
+
+  <!-- OPTIONS -->
+  <div class="options-section">
+    <h3>WHAT TO CLONE</h3>
+    <div class="options-grid">
+      <label class="option-item"><input type="checkbox" id="opt-products" checked> Products</label>
+      <label class="option-item"><input type="checkbox" id="opt-collections" checked> Collections</label>
+      <label class="option-item"><input type="checkbox" id="opt-pages" checked> Pages</label>
+      <label class="option-item"><input type="checkbox" id="opt-menus" checked> Menus</label>
+      <label class="option-item"><input type="checkbox" id="opt-policies" checked> Policies</label>
+      <label class="option-item"><input type="checkbox" id="opt-files" checked> Files/Images</label>
+      <label class="option-item"><input type="checkbox" id="opt-theme" checked> Theme</label>
+      <label class="option-item"><input type="checkbox" id="opt-markets" checked> 🌍 Markets</label>
+      <label class="option-item"><input type="checkbox" id="opt-shipping" checked> 🚚 Shipping</label>
+    </div>
+  </div>
+
+  <button class="btn btn-primary" id="btn-clone" onclick="startClone()">
+    🚀 Start Cloning
+  </button>
+
+  <!-- PROGRESS -->
+  <div class="progress-section" id="progress-section">
+    <div class="progress-label">
+      <span id="progress-step">Preparing...</span>
+      <span id="progress-pct">0%</span>
+    </div>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+    <div class="log-area" id="log-area"></div>
+    <div class="done-banner" id="done-banner">
+      <h3>🎉 Cloning Complete!</h3>
+      <p>Open your destination store admin to verify.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+function getStoreData(prefix) {
+  const p = prefix === 'origin' ? 'orig' : 'dest';
+  return {
+    shop: document.getElementById(`${p}-shop`).value.trim(),
+    clientId: document.getElementById(`${p}-id`).value.trim(),
+    clientSecret: document.getElementById(`${p}-secret`).value.trim(),
+  };
+}
+
+async function testAuth(which) {
+  const data = getStoreData(which);
+  const dot = document.getElementById(`dot-${which === 'origin' ? 'origin' : 'dest'}`);
+  const info = document.getElementById(`info-${which === 'origin' ? 'origin' : 'dest'}`);
+
+  if (!data.shop || !data.clientId || !data.clientSecret) {
+    info.textContent = '⚠️ Fill all fields';
+    return;
+  }
+
+  info.textContent = 'Connecting...';
+  dot.className = 'status-dot';
+
+  try {
+    const res = await fetch('/api/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const result = await res.json();
+    if (result.ok) {
+      dot.className = 'status-dot ok';
+      info.textContent = `✅ ${result.shop.name} (${result.shop.currencyCode})`;
+    } else {
+      dot.className = 'status-dot fail';
+      info.textContent = `❌ ${result.error}`;
+    }
+  } catch (err) {
+    dot.className = 'status-dot fail';
+    info.textContent = `❌ ${err.message}`;
+  }
+}
+
+async function startClone() {
+  const origin = getStoreData('origin');
+  const destination = getStoreData('dest');
+
+  if (!origin.shop || !destination.shop) {
+    alert('Fill in both store credentials');
+    return;
+  }
+
+  const options = {
+    products: document.getElementById('opt-products').checked,
+    collections: document.getElementById('opt-collections').checked,
+    pages: document.getElementById('opt-pages').checked,
+    menus: document.getElementById('opt-menus').checked,
+    policies: document.getElementById('opt-policies').checked,
+    files: document.getElementById('opt-files').checked,
+    theme: document.getElementById('opt-theme').checked,
+    markets: document.getElementById('opt-markets').checked,
+    shipping: document.getElementById('opt-shipping').checked,
+  };
+
+  const btn = document.getElementById('btn-clone');
+  btn.disabled = true;
+  btn.textContent = '⏳ Cloning in progress...';
+
+  const section = document.getElementById('progress-section');
+  const logArea = document.getElementById('log-area');
+  const bar = document.getElementById('progress-bar');
+  const step = document.getElementById('progress-step');
+  const pct = document.getElementById('progress-pct');
+  const done = document.getElementById('done-banner');
+
+  section.classList.add('active');
+  logArea.innerHTML = '';
+  done.classList.remove('active');
+
+  try {
+    const res = await fetch('/api/clone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ origin, destination, options }),
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done: readerDone, value } = await reader.read();
+      if (readerDone) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+
+          if (data.type === 'log') {
+            const div = document.createElement('div');
+            div.className = `log-line ${data.status || 'info'}`;
+            div.textContent = data.msg;
+            logArea.appendChild(div);
+            logArea.scrollTop = logArea.scrollHeight;
+          }
+
+          if (data.type === 'progress') {
+            const p = Math.round((data.current / data.total) * 100);
+            bar.style.width = p + '%';
+            step.textContent = `${data.step} (${data.current}/${data.total})`;
+            pct.textContent = p + '%';
+          }
+
+          if (data.type === 'done') {
+            done.classList.add('active');
+            bar.style.width = '100%';
+            pct.textContent = '100%';
+            step.textContent = 'Complete!';
+          }
+
+          if (data.type === 'error') {
+            const div = document.createElement('div');
+            div.className = 'log-line error';
+            div.textContent = data.msg;
+            logArea.appendChild(div);
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    const div = document.createElement('div');
+    div.className = 'log-line error';
+    div.textContent = '💥 Connection error: ' + err.message;
+    logArea.appendChild(div);
+  }
+
+  btn.disabled = false;
+  btn.textContent = '🚀 Start Cloning';
+}
+</script>
+</body>
+</html>
