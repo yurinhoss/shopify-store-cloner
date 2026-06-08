@@ -299,6 +299,34 @@
     </div>
   </div>
 
+  <!-- CUSTOMIZATION -->
+  <div class="options-section">
+    <h3>CUSTOMIZE DESTINATION</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:16px">Replace origin store name & email in all content (pages, policies, descriptions, theme)</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <div class="field">
+          <label>Origin Store Name (find)</label>
+          <input id="origin-name" placeholder="Ex: Ovalrize NFL Store">
+        </div>
+        <div class="field">
+          <label>Origin Email (find)</label>
+          <input id="origin-email" placeholder="Ex: support@ovalrize.com">
+        </div>
+      </div>
+      <div>
+        <div class="field">
+          <label>New Store Name (replace with)</label>
+          <input id="dest-name" placeholder="Ex: My New NFL Store">
+        </div>
+        <div class="field">
+          <label>New Support Email (replace with)</label>
+          <input id="dest-email" placeholder="Ex: help@mynewstore.com">
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- OPTIONS -->
   <div class="options-section">
     <h3>WHAT TO CLONE</h3>
@@ -382,6 +410,12 @@ async function testAuth(which) {
 async function startClone() {
   const origin = getStoreData('origin');
   const destination = getStoreData('dest');
+  const customize = {
+    originName: document.getElementById('origin-name').value.trim(),
+    originEmail: document.getElementById('origin-email').value.trim(),
+    destName: document.getElementById('dest-name').value.trim(),
+    destEmail: document.getElementById('dest-email').value.trim(),
+  };
 
   if (!origin.shop || !destination.shop) {
     alert('Fill in both store credentials');
@@ -419,7 +453,7 @@ async function startClone() {
     const res = await fetch('/api/clone', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ origin, destination, options }),
+      body: JSON.stringify({ origin, destination, options, customize }),
     });
 
     const reader = res.body.getReader();

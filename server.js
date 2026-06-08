@@ -112,7 +112,23 @@ app.post("/api/auth", async (req, res) => {
 //  API: CLONE (SSE — Server-Sent Events)
 // ============================================================
 app.post("/api/clone", async (req, res) => {
-  const { origin, destination, options } = req.body;
+  const { origin, destination, options, customize } = req.body;
+
+  // Função que substitui nome da loja e email em qualquer texto
+  function replaceContent(text) {
+    if (!text || typeof text !== 'string') return text;
+    let result = text;
+    if (customize?.originName && customize?.destName) {
+      result = result.split(customize.originName).join(customize.destName);
+      // Também tenta case-insensitive
+      const regex = new RegExp(customize.originName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      result = result.replace(regex, customize.destName);
+    }
+    if (customize?.originEmail && customize?.destEmail) {
+      result = result.split(customize.originEmail).join(customize.destEmail);
+    }
+    return result;
+  }
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -130,6 +146,13 @@ app.post("/api/clone", async (req, res) => {
     const tokenOrig = await getToken(origin.shop, origin.clientId, origin.clientSecret);
     const tokenDest = await getToken(destination.shop, destination.clientId, destination.clientSecret);
     log("✅ Autenticado nas duas lojas", "success");
+
+    if (customize?.originName && customize?.destName) {
+      log(`🔄 Substituir: "${customize.originName}" → "${customize.destName}" em todo conteúdo`);
+    }
+    if (customize?.originEmail && customize?.destEmail) {
+      log(`🔄 Substituir: "${customize.originEmail}" → "${customize.destEmail}" em todo conteúdo`);
+    }
 
     const productIdMap = {};
     const collectionIdMap = {};
@@ -178,7 +201,7 @@ app.post("/api/clone", async (req, res) => {
             const opts = (p.options || []).map((o) => ({ name: o.name, values: o.values }));
             const data = await restCall("POST", destination.shop, "/products.json", tokenDest, {
               product: {
-                title: p.title, body_html: p.body_html,
+                title: p.title, body_html: replaceContent(p.body_html),
                 vendor: p.vendor, product_type: p.product_type,
                 handle: p.handle, tags: p.tags,
                 status: p.status || "active", published: true,
@@ -214,7 +237,7 @@ app.post("/api/clone", async (req, res) => {
           pulados++; continue;
         }
         try {
-          const body = { smart_collection: { title: c.title, handle: c.handle, body_html: c.body_html, rules: c.rules, disjunctive: c.disjunctive, sort_order: c.sort_order, published: true } };
+          const body = { smart_collection: { title: c.title, handle: c.handle, body_html: replaceContent(c.body_html), rules: c.rules, disjunctive: c.disjunctive, sort_order: c.sort_order, published: true } };
           if (c.image?.src) body.smart_collection.image = { src: c.image.src };
           const data = await restCall("POST", destination.shop, "/smart_collections.json", tokenDest, body);
           collectionIdMap[c.id] = data.smart_collection.id;
@@ -242,7 +265,7 @@ app.post("/api/clone", async (req, res) => {
           puladosC++;
         } else {
           try {
-            const body = { custom_collection: { title: c.title, handle: c.handle, body_html: c.body_html, sort_order: c.sort_order || "manual", published: true } };
+            const body = { custom_collection: { title: c.title, handle: c.handle, body_html: replaceContent(c.body_html), sort_order: c.sort_order || "manual", published: true } };
             if (c.image?.src) body.custom_collection.image = { src: c.image.src };
             const data = await restCall("POST", destination.shop, "/custom_collections.json", tokenDest, body);
             destColId = data.custom_collection.id;
@@ -282,7 +305,7 @@ app.post("/api/clone", async (req, res) => {
         if (handlesDest.has(p.handle)) continue;
         try {
           await restCall("POST", destination.shop, "/pages.json", tokenDest, {
-            page: { title: p.title, handle: p.handle, body_html: p.body_html, published: true },
+            page: { title: p.title, handle: p.handle, body_html: replaceContent(p.body_html), published: true },
           });
           criados++;
         } catch {}
@@ -334,7 +357,7 @@ app.post("/api/clone", async (req, res) => {
           if (!pol.body?.trim()) continue;
           try {
             await gql(destination.shop, `mutation shopPolicyUpdate($shopPolicy:ShopPolicyInput!){shopPolicyUpdate(shopPolicy:$shopPolicy){shopPolicy{type}userErrors{message}}}`,
-              { shopPolicy: { type: pol.type, body: pol.body } }, tokenDest);
+              { shopPolicy: { type: pol.type, body: replaceContent(pol.body) } }, tokenDest);
           } catch {}
         }
         log("✅ Políticas copiadas", "success");
@@ -399,7 +422,7 @@ app.post("/api/clone", async (req, res) => {
           try {
             const ad = await restCall("GET", origin.shop, `/themes/${tOrigem.id}/assets.json?asset[key]=${encodeURIComponent(keys[i])}`, tokenOrig);
             const putBody = { asset: { key: keys[i] } };
-            if (ad.asset?.value !== undefined) putBody.asset.value = ad.asset.value;
+            if (ad.asset?.value !== undefined) putBody.asset.value = replaceContent(ad.asset.value);
             else if (ad.asset?.attachment) putBody.asset.attachment = ad.asset.attachment;
             else continue;
             await restCall("PUT", destination.shop, `/themes/${tDestino.id}/assets.json`, tokenDest, putBody);
