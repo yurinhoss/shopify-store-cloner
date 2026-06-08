@@ -82,6 +82,18 @@ async function gql(shop, query, variables, token) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+// Processa items em lotes paralelos de N
+async function batch(items, fn, concurrency = 5, delayMs = 100) {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const chunk = items.slice(i, i + concurrency);
+    const res = await Promise.allSettled(chunk.map(fn));
+    results.push(...res);
+    if (i + concurrency < items.length) await sleep(delayMs);
+  }
+  return results;
+}
+
 // ============================================================
 //  API: TEST AUTH
 // ============================================================
@@ -135,50 +147,52 @@ app.post("/api/clone", async (req, res) => {
       existentes.forEach((p) => handlesDest.set(p.handle, p.id));
 
       let criados = 0, pulados = 0, falha = 0;
-      for (let i = 0; i < produtos.length; i++) {
-        const p = produtos[i];
-        progress("products", i + 1, produtos.length);
-        origIdToHandle[p.id] = p.handle;
 
+      // Pré-mapeia os que já existem (rápido)
+      for (const p of produtos) {
+        origIdToHandle[p.id] = p.handle;
         if (handlesDest.has(p.handle)) {
           productIdMap[p.id] = handlesDest.get(p.handle);
           handleToDestId[p.handle] = handlesDest.get(p.handle);
           pulados++;
-          continue;
         }
+      }
+      log(`⏭️ ${pulados} já existem, criando ${produtos.length - pulados} novos (5 em paralelo)...`);
 
-        try {
-          const images = (p.images || []).map((img) => ({ src: img.src, alt: img.alt || "" }));
-          const variants = (p.variants || []).map((v) => ({
-            option1: v.option1, option2: v.option2, option3: v.option3,
-            price: v.price, compare_at_price: v.compare_at_price,
-            sku: v.sku, barcode: v.barcode,
-            inventory_management: v.inventory_management,
-            inventory_policy: v.inventory_policy || "continue",
-            inventory_quantity: v.inventory_quantity || 100,
-            requires_shipping: v.requires_shipping, taxable: v.taxable,
-            weight: v.weight, weight_unit: v.weight_unit,
-          }));
-          const opts = (p.options || []).map((o) => ({ name: o.name, values: o.values }));
-
-          const data = await restCall("POST", destination.shop, "/products.json", tokenDest, {
-            product: {
-              title: p.title, body_html: p.body_html,
-              vendor: p.vendor, product_type: p.product_type,
-              handle: p.handle, tags: p.tags,
-              status: p.status || "active", published: true,
-              options: opts, variants, images,
-            },
-          });
-          productIdMap[p.id] = data.product.id;
-          handleToDestId[p.handle] = data.product.id;
-          criados++;
-          if (criados % 10 === 0) log(`✅ ${criados} produtos criados...`);
-        } catch (err) {
-          log(`❌ ${p.title.slice(0, 40)}: ${err.message.slice(0, 60)}`, "error");
-          falha++;
-        }
-        await sleep(500);
+      const novos = produtos.filter(p => !handlesDest.has(p.handle));
+      for (let i = 0; i < novos.length; i += 5) {
+        const chunk = novos.slice(i, i + 5);
+        await Promise.allSettled(chunk.map(async (p) => {
+          try {
+            const images = (p.images || []).map((img) => ({ src: img.src, alt: img.alt || "" }));
+            const variants = (p.variants || []).map((v) => ({
+              option1: v.option1, option2: v.option2, option3: v.option3,
+              price: v.price, compare_at_price: v.compare_at_price,
+              sku: v.sku, barcode: v.barcode,
+              inventory_management: v.inventory_management,
+              inventory_policy: v.inventory_policy || "continue",
+              inventory_quantity: v.inventory_quantity || 100,
+              requires_shipping: v.requires_shipping, taxable: v.taxable,
+              weight: v.weight, weight_unit: v.weight_unit,
+            }));
+            const opts = (p.options || []).map((o) => ({ name: o.name, values: o.values }));
+            const data = await restCall("POST", destination.shop, "/products.json", tokenDest, {
+              product: {
+                title: p.title, body_html: p.body_html,
+                vendor: p.vendor, product_type: p.product_type,
+                handle: p.handle, tags: p.tags,
+                status: p.status || "active", published: true,
+                options: opts, variants, images,
+              },
+            });
+            productIdMap[p.id] = data.product.id;
+            handleToDestId[p.handle] = data.product.id;
+            criados++;
+          } catch (err) { falha++; }
+        }));
+        progress("products", Math.min(i + 5, novos.length), novos.length);
+        if (criados % 20 === 0 && criados > 0) log(`✅ ${criados} produtos criados...`);
+        await sleep(50);
       }
       log(`✅ Produtos: ${criados} criados | ${pulados} já existiam | ${falha} erros`, "success");
     }
@@ -206,7 +220,7 @@ app.post("/api/clone", async (req, res) => {
           collectionIdMap[c.id] = data.smart_collection.id;
           criados++;
         } catch {}
-        await sleep(400);
+        await sleep(100);
       }
       log(`✅ Smart collections: ${criados} criadas | ${pulados} já existiam`, "success");
 
@@ -249,10 +263,10 @@ app.post("/api/clone", async (req, res) => {
               });
               totalCollects++;
             } catch {}
-            await sleep(150);
+            await sleep(50);
           }
         } catch {}
-        await sleep(300);
+        await sleep(80);
       }
       log(`✅ Custom collections: ${criadosC} criadas | ${puladosC} existiam | ${totalCollects} collects`, "success");
     }
@@ -272,7 +286,7 @@ app.post("/api/clone", async (req, res) => {
           });
           criados++;
         } catch {}
-        await sleep(300);
+        await sleep(80);
       }
       log(`✅ Páginas: ${criados} criadas`, "success");
     }
@@ -352,10 +366,10 @@ app.post("/api/clone", async (req, res) => {
             { files: [{ originalSource: arquivos[i].url, alt: arquivos[i].alt, contentType: "IMAGE" }] }, tokenDest);
           uploaded++;
         } catch {}
-        await sleep(500);
+        await sleep(100);
       }
       log(`✅ Arquivos: ${uploaded} enviados`, "success");
-      await sleep(5000);
+      await sleep(2000);
     }
 
     // ==== TEMA ====
@@ -387,7 +401,7 @@ app.post("/api/clone", async (req, res) => {
             await restCall("PUT", destination.shop, `/themes/${tDestino.id}/assets.json`, tokenDest, putBody);
             copiados++;
           } catch {}
-          await sleep(300);
+          await sleep(80);
         }
         log(`✅ Tema: ${copiados} assets copiados`, "success");
       }
@@ -442,7 +456,7 @@ app.post("/api/clone", async (req, res) => {
             } catch {}
           }
         } catch {}
-        await sleep(400);
+        await sleep(100);
       }
       log(`✅ Markets: ${mkCriados} criados | ${existingCountries.size} já existiam`, "success");
     }
@@ -553,7 +567,7 @@ app.post("/api/clone", async (req, res) => {
             }, tokenDest);
             shCriados++;
           } catch {}
-          await sleep(400);
+          await sleep(100);
         }
         log(`✅ Fretes: ${shCriados} países criados | Standard €4.90 | Priority €9.70`, "success");
       }
