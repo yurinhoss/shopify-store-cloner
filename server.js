@@ -328,15 +328,19 @@ app.post("/api/clone", async (req, res) => {
     // ==== POLÍTICAS ====
     if (options.policies) {
       log("━━━━━━━━━━ ETAPA 6: POLÍTICAS ━━━━━━━━━━");
-      const dataP = await gql(origin.shop, `query { shop { shopPolicies { type body } } }`, {}, tokenOrig);
-      for (const pol of dataP.shop.shopPolicies || []) {
-        if (!pol.body?.trim()) continue;
-        try {
-          await gql(destination.shop, `mutation shopPolicyUpdate($shopPolicy:ShopPolicyInput!){shopPolicyUpdate(shopPolicy:$shopPolicy){shopPolicy{type}userErrors{message}}}`,
-            { shopPolicy: { type: pol.type, body: pol.body } }, tokenDest);
-        } catch {}
+      try {
+        const dataP = await gql(origin.shop, `query { shop { shopPolicies { type body } } }`, {}, tokenOrig);
+        for (const pol of dataP.shop.shopPolicies || []) {
+          if (!pol.body?.trim()) continue;
+          try {
+            await gql(destination.shop, `mutation shopPolicyUpdate($shopPolicy:ShopPolicyInput!){shopPolicyUpdate(shopPolicy:$shopPolicy){shopPolicy{type}userErrors{message}}}`,
+              { shopPolicy: { type: pol.type, body: pol.body } }, tokenDest);
+          } catch {}
+        }
+        log("✅ Políticas copiadas", "success");
+      } catch (err) {
+        log("⚠️ Sem permissão para políticas (ative read_legal_policies no app) — pulando", "error");
       }
-      log("✅ Políticas copiadas", "success");
     }
 
     // ==== ARQUIVOS (banners, ícones) ====
@@ -430,11 +434,32 @@ app.post("/api/clone", async (req, res) => {
         {code:"ZA",name:"South Africa"},{code:"MA",name:"Morocco"},{code:"TR",name:"Turkey"},
       ];
 
-      // Lista países já em markets
+      // Lista países já em markets INDIVIDUAIS (ignora Global/International)
       const existingCountries = new Set();
       try {
-        const mData = await gql(destination.shop, `query{markets(first:100){edges{node{regions(first:100){edges{node{...on MarketRegionCountry{code}}}}}}}}`, {}, tokenDest);
-        for (const e of mData.markets.edges) for (const r of e.node.regions.edges) if (r.node.code) existingCountries.add(r.node.code);
+        const mData = await gql(destination.shop, `
+          query {
+            markets(first: 100) {
+              edges {
+                node {
+                  name
+                  regions(first: 100) {
+                    edges { node { ... on MarketRegionCountry { code } } }
+                  }
+                }
+              }
+            }
+          }
+        `, {}, tokenDest);
+        for (const e of mData.markets.edges) {
+          const regionCount = e.node.regions.edges.length;
+          // Pula markets com muitos países (Global/International = catch-all)
+          if (regionCount > 10) {
+            log(`⏭️ Ignorando market "${e.node.name}" (${regionCount} países — catch-all)`);
+            continue;
+          }
+          for (const r of e.node.regions.edges) if (r.node.code) existingCountries.add(r.node.code);
+        }
       } catch {}
 
       const novos = PAISES_MARKETS.filter(p => !existingCountries.has(p.code));
@@ -536,7 +561,30 @@ app.post("/api/clone", async (req, res) => {
       log(`💰 Moeda da loja: ${moedaLoja} | Standard: ${moedaLoja} ${precoStd} | Priority: ${moedaLoja} ${precoPri}`);
 
       // Pega delivery profile
-      const profData = await gql(destination.shop, `query{deliveryProfiles(first:10){edges{node{id default profileLocationGroups{locationGroup{id}locationGroupZones(first:100){edges{node{zone{countries{code{countryCode}}}}}}}}}}`, {}, tokenDest);
+      const profData = await gql(destination.shop, `
+        query {
+          deliveryProfiles(first: 10) {
+            edges {
+              node {
+                id
+                default
+                profileLocationGroups {
+                  locationGroup { id }
+                  locationGroupZones(first: 100) {
+                    edges {
+                      node {
+                        zone {
+                          countries { code { countryCode } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `, {}, tokenDest);
       const profile = profData.deliveryProfiles.edges.map(e=>e.node).find(p=>p.default);
       if (!profile) { log("❌ Default delivery profile não encontrado", "error"); }
       else {
