@@ -49,6 +49,47 @@ async function restCall(method, shop, path, token, body = null) {
   throw new Error("Rate limit persistente");
 }
 
+// ============================================================
+//  Baixa imagem como base64 (resolve problema de CDN entre lojas)
+// ============================================================
+async function downloadBase64(url) {
+  if (!url) return null;
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength < 500) return null; // muito pequeno = placeholder
+    return Buffer.from(buf).toString("base64");
+  } catch { return null; }
+}
+
+// Upload de imagem como base64 via GraphQL fileCreate
+async function uploadFileBase64(base64, filename, tokenDest, shopDest) {
+  if (!base64) return null;
+  const ext = filename.split(".").pop().toLowerCase() || "jpg";
+  const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : "image/jpeg";
+  // Usa staging uploads do Shopify pra upload de base64
+  const mutation = `
+    mutation fileCreate($files: [FileCreateInput!]!) {
+      fileCreate(files: $files) {
+        files {
+          ... on MediaImage {
+            id
+            image { url }
+          }
+        }
+        userErrors { field message }
+      }
+    }
+  `;
+  try {
+    const data = await gql(shopDest, mutation, {
+      files: [{ originalSource: `data:${mime};base64,${base64}`, contentType: "IMAGE", filename }]
+    }, tokenDest);
+    return data.fileCreate?.files?.[0]?.image?.url || null;
+  } catch { return null; }
+}
+
 async function restPaginated(shop, path, token, key) {
   const items = [];
   let url = `https://${shop}/admin/api/2024-10${path}`;
@@ -238,7 +279,10 @@ app.post("/api/clone", async (req, res) => {
         }
         try {
           const body = { smart_collection: { title: c.title, handle: c.handle, body_html: replaceContent(c.body_html), rules: c.rules, disjunctive: c.disjunctive, sort_order: c.sort_order, published: true } };
-          if (c.image?.src) body.smart_collection.image = { src: c.image.src };
+          if (c.image?.src) {
+            const b64 = await downloadBase64(c.image.src);
+            body.smart_collection.image = b64 ? { attachment: b64 } : { src: c.image.src };
+          }
           const data = await restCall("POST", destination.shop, "/smart_collections.json", tokenDest, body);
           collectionIdMap[c.id] = data.smart_collection.id;
           criados++;
@@ -266,7 +310,10 @@ app.post("/api/clone", async (req, res) => {
         } else {
           try {
             const body = { custom_collection: { title: c.title, handle: c.handle, body_html: replaceContent(c.body_html), sort_order: c.sort_order || "manual", published: true } };
-            if (c.image?.src) body.custom_collection.image = { src: c.image.src };
+            if (c.image?.src) {
+              const b64 = await downloadBase64(c.image.src);
+              body.custom_collection.image = b64 ? { attachment: b64 } : { src: c.image.src };
+            }
             const data = await restCall("POST", destination.shop, "/custom_collections.json", tokenDest, body);
             destColId = data.custom_collection.id;
             collectionIdMap[c.id] = destColId;
@@ -373,30 +420,59 @@ app.post("/api/clone", async (req, res) => {
       let cursor = null;
       while (true) {
         const after = cursor ? `, after: "${cursor}"` : "";
-        const q = `query { files(first: 50${after}) { edges { cursor node { ... on MediaImage { id alt image { url } fileStatus } ... on GenericFile { id url alt fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
+        const q = `query { files(first: 50${after}) { edges { cursor node { ... on MediaImage { id alt image { url originalSrc } fileStatus } ... on GenericFile { id url alt fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
         const data = await gql(origin.shop, q, {}, tokenOrig);
         for (const e of data.files.edges) {
           const n = e.node;
-          const url = n?.image?.url || n?.url;
-          if (url && n.fileStatus === "READY") arquivos.push({ url, alt: n.alt || "" });
+          const url = n?.image?.originalSrc || n?.image?.url || n?.url;
+          if (url && n.fileStatus === "READY") {
+            const filename = url.split("/").pop().split("?")[0];
+            arquivos.push({ url, alt: n.alt || "", filename });
+          }
         }
         if (!data.files.pageInfo.hasNextPage) break;
         cursor = data.files.pageInfo.endCursor;
       }
       log(`📁 ${arquivos.length} arquivos encontrados`);
 
+      // Mapa URL origem → URL destino (para substituir no tema depois)
+      const urlMap = {};
       let uploaded = 0;
       for (let i = 0; i < arquivos.length; i++) {
+        const arq = arquivos[i];
         progress("files", i + 1, arquivos.length);
         try {
-          await gql(destination.shop, `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
-            { files: [{ originalSource: arquivos[i].url, alt: arquivos[i].alt, contentType: "IMAGE" }] }, tokenDest);
-          uploaded++;
+          // Baixa como base64 pra garantir o upload mesmo de CDN protegido
+          const b64 = await downloadBase64(arq.url);
+          if (b64) {
+            const ext = arq.filename.split(".").pop().toLowerCase();
+            const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
+            const r = await gql(destination.shop,
+              `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{...on MediaImage{image{url}}}userErrors{message}}}`,
+              { files: [{ originalSource: `data:${mime};base64,${b64}`, contentType: "IMAGE", filename: arq.filename }] },
+              tokenDest);
+            const novaUrl = r.fileCreate?.files?.[0]?.image?.url;
+            if (novaUrl) urlMap[arq.url] = novaUrl;
+            uploaded++;
+          } else {
+            // Fallback: passa URL diretamente
+            await gql(destination.shop, `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
+              { files: [{ originalSource: arq.url, alt: arq.alt, contentType: "IMAGE" }] }, tokenDest);
+            uploaded++;
+          }
         } catch {}
-        await sleep(100);
+        await sleep(200);
       }
-      log(`✅ Arquivos: ${uploaded} enviados`, "success");
-      await sleep(2000);
+      log(`✅ Arquivos: ${uploaded} enviados | ${Object.keys(urlMap).length} URLs mapeadas`, "success");
+      await sleep(3000); // aguarda Shopify processar
+
+      // Guarda urlMap no contexto para usar no tema
+      if (Object.keys(urlMap).length > 0) {
+        log(`🔄 URLs de CDN mapeadas para substituição no tema`);
+        // Armazena no objeto customize para reutilizar no tema
+        customize._urlMap = urlMap;
+        customize._originShopCDN = origin.shop.replace(".myshopify.com", "");
+      }
     }
 
     // ==== TEMA ====
@@ -422,9 +498,26 @@ app.post("/api/clone", async (req, res) => {
           try {
             const ad = await restCall("GET", origin.shop, `/themes/${tOrigem.id}/assets.json?asset[key]=${encodeURIComponent(keys[i])}`, tokenOrig);
             const putBody = { asset: { key: keys[i] } };
-            if (ad.asset?.value !== undefined) putBody.asset.value = replaceContent(ad.asset.value);
-            else if (ad.asset?.attachment) putBody.asset.attachment = ad.asset.attachment;
-            else continue;
+            if (ad.asset?.value !== undefined) {
+              let value = replaceContent(ad.asset.value);
+              // Substitui URLs do CDN da origem pelas novas URLs do destino
+              if (customize._urlMap) {
+                for (const [origUrl, destUrl] of Object.entries(customize._urlMap)) {
+                  value = value.split(origUrl).join(destUrl);
+                  // Também tenta sem parâmetros de query
+                  const origBase = origUrl.split("?")[0];
+                  const destBase = destUrl.split("?")[0];
+                  if (origBase !== origUrl) value = value.split(origBase).join(destBase);
+                }
+              }
+              // Substitui referências ao shop da origem (shopify CDN genérico)
+              if (customize._originShopCDN) {
+                value = value.split(customize._originShopCDN).join(destination.shop.replace(".myshopify.com", ""));
+              }
+              putBody.asset.value = value;
+            } else if (ad.asset?.attachment) {
+              putBody.asset.attachment = ad.asset.attachment;
+            } else continue;
             await restCall("PUT", destination.shop, `/themes/${tDestino.id}/assets.json`, tokenDest, putBody);
             copiados++;
           } catch {}
