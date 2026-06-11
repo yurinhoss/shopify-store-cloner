@@ -245,6 +245,42 @@
     .stores-grid { grid-template-columns: 1fr; }
     .arrow-col { transform: rotate(90deg); padding: 0; }
   }
+
+  /* ── TABS ── */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 28px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab-btn {
+    padding: 10px 24px;
+    border: none;
+    background: none;
+    color: var(--text2);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: all 0.2s;
+    border-radius: 8px 8px 0 0;
+  }
+  .tab-btn:hover { color: var(--text); background: var(--surface2); }
+  .tab-btn.active { color: var(--accent2); border-bottom-color: var(--accent); background: var(--surface); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ── REVIEWS TAB ── */
+  .reviews-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  .review-stat { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; }
+  .review-stat .val { font-size: 28px; font-weight: 700; color: var(--accent2); }
+  .review-stat .lbl { font-size: 12px; color: var(--text2); margin-top: 4px; }
+  .rating-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+  .rating-bar .stars { color: #eab308; width: 60px; }
+  .rating-bar .bar-wrap { flex: 1; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+  .rating-bar .bar-fill { height: 100%; background: #eab308; border-radius: 3px; }
+  .rating-bar .pct { color: var(--text2); width: 30px; text-align: right; }
 </style>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
@@ -252,6 +288,15 @@
 <div class="container">
   <h1>🔄 Shopify Store Cloner</h1>
   <p class="subtitle">Clone products, collections, pages, menus, theme, and files between stores</p>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('clone')">🔄 Clone Store</button>
+    <button class="tab-btn" onclick="switchTab('reviews')">⭐ Reviews Generator</button>
+  </div>
+
+  <!-- TAB: CLONE -->
+  <div class="tab-panel active" id="tab-clone">
 
   <div class="stores-grid">
     <!-- ORIGIN -->
@@ -364,6 +409,189 @@
     </div>
   </div>
 </div>
+
+  </div><!-- /tab-clone -->
+
+  <!-- TAB: REVIEWS -->
+  <div class="tab-panel" id="tab-reviews">
+    <div class="options-section">
+      <h3>JUDGE.ME REVIEWS GENERATOR</h3>
+      <p style="font-size:12px;color:var(--text2);margin-bottom:20px">Busca produtos aleatórios da loja e cria avaliações realistas automaticamente</p>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+        <div class="field">
+          <label>Shop Domain</label>
+          <input id="rv-shop" placeholder="mystore.myshopify.com">
+        </div>
+        <div class="field">
+          <label>Judge.me Private API Token</label>
+          <input id="rv-token" type="password" placeholder="Bllni_...">
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px">
+        <div class="field">
+          <label>Quantidade de Reviews</label>
+          <input id="rv-qty" type="number" value="100" min="1" max="500">
+        </div>
+        <div class="field">
+          <label>% de 5 estrelas</label>
+          <input id="rv-five" type="number" value="85" min="50" max="100">
+        </div>
+        <div class="field">
+          <label>Imagens (OpenAI Key opcional)</label>
+          <input id="rv-openai" type="password" placeholder="sk-proj-... (opcional)">
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <label class="option-item" style="width:auto">
+          <input type="checkbox" id="rv-images" checked> Gerar imagens via DALL-E 3
+        </label>
+        <span style="font-size:12px;color:var(--text2)">~10 imagens distribuídas pelas reviews</span>
+      </div>
+
+      <button class="btn btn-primary" id="btn-reviews" onclick="startReviews()">
+        ⭐ Gerar Reviews
+      </button>
+    </div>
+
+    <!-- Stats em tempo real -->
+    <div class="options-section" id="rv-stats-section" style="display:none">
+      <div class="reviews-grid">
+        <div class="review-stat">
+          <div class="val" id="rv-stat-criadas">0</div>
+          <div class="lbl">Reviews criadas</div>
+        </div>
+        <div class="review-stat">
+          <div class="val" id="rv-stat-produtos">0</div>
+          <div class="lbl">Produtos encontrados</div>
+        </div>
+      </div>
+      <div id="rv-rating-bars" style="margin-bottom:16px">
+        <div class="rating-bar"><span class="stars">★★★★★</span><div class="bar-wrap"><div class="bar-fill" id="bar5" style="width:0%"></div></div><span class="pct" id="pct5">0%</span></div>
+        <div class="rating-bar"><span class="stars">★★★★☆</span><div class="bar-wrap"><div class="bar-fill" id="bar4" style="width:0%;background:#94a3b8"></div></div><span class="pct" id="pct4">0%</span></div>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar" id="rv-progress-bar"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-top:4px">
+        <span id="rv-progress-label">Iniciando...</span>
+        <span id="rv-progress-pct">0%</span>
+      </div>
+      <div class="log-area" id="rv-log-area" style="margin-top:12px"></div>
+      <div class="done-banner" id="rv-done-banner">
+        <h3>🎉 Reviews geradas com sucesso!</h3>
+        <p>Acesse o painel do Judge.me para visualizar.</p>
+      </div>
+    </div>
+  </div><!-- /tab-reviews -->
+
+<script>
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach((b,i) => {
+    b.classList.toggle('active', (i===0&&tab==='clone')||(i===1&&tab==='reviews'));
+  });
+  document.getElementById('tab-clone').classList.toggle('active', tab==='clone');
+  document.getElementById('tab-reviews').classList.toggle('active', tab==='reviews');
+}
+
+async function startReviews() {
+  const shop = document.getElementById('rv-shop').value.trim();
+  const token = document.getElementById('rv-token').value.trim();
+  const qty = parseInt(document.getElementById('rv-qty').value) || 100;
+  const fivePct = parseInt(document.getElementById('rv-five').value) || 85;
+  const openaiKey = document.getElementById('rv-openai').value.trim();
+  const useImages = document.getElementById('rv-images').checked;
+
+  if (!shop || !token) { alert('Preencha o Shop Domain e o Judge.me Token'); return; }
+
+  const btn = document.getElementById('btn-reviews');
+  btn.disabled = true;
+  btn.textContent = '⏳ Gerando reviews...';
+
+  document.getElementById('rv-stats-section').style.display = 'block';
+  document.getElementById('rv-log-area').innerHTML = '';
+  document.getElementById('rv-done-banner').classList.remove('active');
+  document.getElementById('rv-stat-criadas').textContent = '0';
+  document.getElementById('rv-progress-bar').style.width = '0%';
+
+  let count5 = 0, count4 = 0;
+
+  try {
+    const res = await fetch('/api/reviews', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shop, token, qty, fivePct, openaiKey, useImages }),
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+
+          if (data.type === 'products') {
+            document.getElementById('rv-stat-produtos').textContent = data.count;
+            rvLog(`📦 ${data.count} produtos encontrados na loja`);
+          }
+
+          if (data.type === 'review') {
+            const total = parseInt(document.getElementById('rv-stat-criadas').textContent) + 1;
+            document.getElementById('rv-stat-criadas').textContent = total;
+            if (data.stars === 5) count5++; else count4++;
+            const tot = count5 + count4;
+            const p5 = Math.round(count5/tot*100);
+            const p4 = Math.round(count4/tot*100);
+            document.getElementById('bar5').style.width = p5+'%';
+            document.getElementById('pct5').textContent = p5+'%';
+            document.getElementById('bar4').style.width = p4+'%';
+            document.getElementById('pct4').textContent = p4+'%';
+            const pct = Math.round(total/qty*100);
+            document.getElementById('rv-progress-bar').style.width = pct+'%';
+            document.getElementById('rv-progress-pct').textContent = pct+'%';
+            document.getElementById('rv-progress-label').textContent = `${total}/${qty} reviews criadas`;
+            if (data.img) rvLog(`  ✅ [${total}/${qty}] ${data.name} — ${data.stars}⭐ 📸`);
+            else rvLog(`  ✅ [${total}/${qty}] ${data.name} — ${data.stars}⭐`);
+          }
+
+          if (data.type === 'log') rvLog(data.msg);
+          if (data.type === 'done') {
+            document.getElementById('rv-done-banner').classList.add('active');
+            document.getElementById('rv-progress-bar').style.width = '100%';
+            document.getElementById('rv-progress-pct').textContent = '100%';
+          }
+          if (data.type === 'error') rvLog('❌ ' + data.msg);
+        } catch {}
+      }
+    }
+  } catch(err) {
+    rvLog('💥 Erro: ' + err.message);
+  }
+
+  btn.disabled = false;
+  btn.textContent = '⭐ Gerar Reviews';
+}
+
+function rvLog(msg) {
+  const el = document.getElementById('rv-log-area');
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  div.textContent = msg;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+</script>
 
 <script>
 function getStoreData(prefix) {
