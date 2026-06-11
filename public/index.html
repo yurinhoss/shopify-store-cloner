@@ -330,8 +330,8 @@ async function startReviews() {
   try{
     // Busca produtos
     rvLog('🔍 Buscando produtos da loja...');
-    const prodRes=await fetch(`https://judge.me/api/v1/products?api_token=${token}&shop_domain=${shop}&per_page=100`);
-    if(!prodRes.ok){rvLog('❌ Erro ao buscar produtos: '+prodRes.status);btn.disabled=false;btn.textContent='⭐ Generate Reviews';return;}
+    const prodRes=await fetch('/api/jm-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:'GET',path:`/api/v1/products?api_token=${token}&shop_domain=${shop}&per_page=100`})});
+    if(!prodRes.ok){const e=await prodRes.json().catch(()=>({}));rvLog('❌ Erro ao buscar produtos: '+prodRes.status+' '+(e.error||''));btn.disabled=false;btn.textContent='⭐ Generate Reviews';return;}
     const prodData=await prodRes.json();
     const products=prodData.products||[];
     if(!products.length){rvLog('❌ Nenhum produto encontrado.');btn.disabled=false;btn.textContent='⭐ Generate Reviews';return;}
@@ -357,7 +357,7 @@ async function startReviews() {
           curated:'ok',published:true
         };
         try{
-          const r=await fetch('https://judge.me/api/v1/reviews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          const r=await fetch('/api/jm-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:'POST',path:'/api/v1/reviews',body})});
           if(r.status===200||r.status===201){
             criadas++;
             if(stars===5)c5++;else c4++;

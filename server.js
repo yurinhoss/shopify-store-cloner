@@ -1086,6 +1086,27 @@ app.post("/api/reviews", async (req, res) => {
   res.end();
 });
 
+
+// ============================================================
+//  API: JUDGE.ME PROXY (usa fetch nativo do Node)
+// ============================================================
+app.post("/api/jm-proxy", async (req, res) => {
+  const { method, path, body } = req.body;
+  try {
+    const opts = {
+      method: method || "GET",
+      headers: { "Content-Type": "application/json" },
+    };
+    if (body && method === "POST") opts.body = JSON.stringify(body);
+    // usa fetch NATIVO do Node (globalThis.fetch), não node-fetch
+    const r = await globalThis.fetch(`https://judge.me${path}`, opts);
+    const data = await r.json().catch(() => ({}));
+    res.status(r.status).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n🔄 Shopify Store Cloner rodando na porta ${PORT}\n`);
