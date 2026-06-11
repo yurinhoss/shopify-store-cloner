@@ -304,42 +304,78 @@ async function startClone() {
   btn.disabled=false;btn.textContent='🚀 Start Cloning';
 }
 async function startReviews() {
-  const shop=document.getElementById('rv-shop').value.trim(),token=document.getElementById('rv-token').value.trim(),qty=parseInt(document.getElementById('rv-qty').value)||100,fivePct=parseInt(document.getElementById('rv-five').value)||85,openaiKey=document.getElementById('rv-openai').value.trim(),useImages=document.getElementById('rv-images').checked;
+  const shop=document.getElementById('rv-shop').value.trim(),token=document.getElementById('rv-token').value.trim(),qty=parseInt(document.getElementById('rv-qty').value)||100,fivePct=parseInt(document.getElementById('rv-five').value)||85,useImages=document.getElementById('rv-images').checked;
   if(!shop||!token){alert('Fill in the Shop Domain and Judge.me Token');return;}
   const btn=document.getElementById('btn-reviews');btn.disabled=true;btn.textContent='⏳ Generating...';
   document.getElementById('rv-stats-section').style.display='block';
   document.getElementById('rv-log-area').innerHTML='';document.getElementById('rv-done-banner').classList.remove('active');
   document.getElementById('rv-stat-criadas').textContent='0';document.getElementById('rv-progress-bar').style.width='0%';
-  let c5=0,c4=0;
+
+  const NOMES=['James W.','Sophie M.','Lucas B.','Emma T.','Noah K.','Olivia R.','Liam S.','Ava C.','Mason D.','Isabella F.','Ethan G.','Mia H.','Alexander J.','Charlotte L.','Benjamin N.','Amelia P.','William Q.','Harper V.','Evelyn Z.','Michael R.','Sarah K.','David L.','Emma J.','Chris B.','Laura S.','Tom W.','Anna M.','Peter H.','Lisa G.','Carlos M.'];
+  const T5=['Absolutely love the fit. The design is unique and gets compliments every time I wear it. Quality exceeded my expectations.','Amazing product! Fast shipping and the quality is top notch. Will definitely order again.','Perfect fit and the material feels premium. Exactly as described. Very happy with this purchase.','Incredible quality for the price. The design is stylish and modern. Highly recommend!','Best purchase I've made this year. The product looks even better in person. 10/10!','Great quality and fast delivery. The sizing was spot on. Love it!','This exceeded all my expectations. Excellent craftsmanship and arrived quickly.','Stunning design and very comfortable. I've received so many compliments already.','Very satisfied! Premium quality and fast shipping. Will order another.','Exactly what I was looking for. Fits perfectly and looks amazing. Will buy again!'];
+  const T4=['Really nice product overall. Quality is good and shipping was reasonably fast.','Good quality item. Looks great and fits well. Minor delay in shipping but worth the wait.','Nice product, quality is solid. Would have given 5 stars but took a bit longer to arrive.','Good purchase overall. Product is as described. Would buy again.','Happy with it. Good quality and nice design.'];
+  const TIT5=['Love it!','Perfect!','Amazing quality','Exceeded expectations','Highly recommend!','5 stars!','Best purchase!','Absolutely stunning','So comfortable!','Great product!'];
+  const TIT4=['Really good','Nice product','Good quality','Happy with it','Worth buying'];
+  const DOMS=['gmail.com','yahoo.com','hotmail.com','outlook.com','icloud.com'];
+  function rand(a){return a[Math.floor(Math.random()*a.length)];}
+  function email(n){return n.toLowerCase().replace(/[^a-z]/g,'')+Math.floor(Math.random()*999)+'@'+rand(DOMS);}
+  function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+  let c5=0,c4=0,criadas=0;
   try{
-    const res=await fetch('/api/reviews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({shop,token,qty,fivePct,openaiKey,useImages})});
-    const reader=res.body.getReader(),decoder=new TextDecoder();let buffer='';
-    while(true){
-      const{done,value}=await reader.read();if(done)break;
-      buffer+=decoder.decode(value,{stream:true});const lines=buffer.split('\n');buffer=lines.pop();
-      for(const line of lines){
-        if(!line.startsWith('data: '))continue;
+    // Busca produtos
+    rvLog('🔍 Buscando produtos da loja...');
+    const prodRes=await fetch(`https://judge.me/api/v1/products?api_token=${token}&shop_domain=${shop}&per_page=100`);
+    if(!prodRes.ok){rvLog('❌ Erro ao buscar produtos: '+prodRes.status);btn.disabled=false;btn.textContent='⭐ Generate Reviews';return;}
+    const prodData=await prodRes.json();
+    const products=prodData.products||[];
+    if(!products.length){rvLog('❌ Nenhum produto encontrado.');btn.disabled=false;btn.textContent='⭐ Generate Reviews';return;}
+    document.getElementById('rv-stat-produtos').textContent=products.length;
+    rvLog(`📦 ${products.length} produtos encontrados`);
+
+    const perProd=Math.ceil(qty/products.length);
+    for(const product of products){
+      const qtdP=Math.min(perProd,qty-criadas);
+      if(qtdP<=0)break;
+      for(let i=0;i<qtdP;i++){
+        const stars=Math.random()*100<fivePct?5:4;
+        const nome=rand(NOMES);
+        const body={
+          api_token:token,shop_domain:shop,platform:'shopify',
+          id:product.external_id,
+          title:stars===5?rand(TIT5):rand(TIT4),
+          body:stars===5?rand(T5):rand(T4),
+          rating:stars,name:nome,email:email(nome),
+          picture_urls:[],
+          verified_buyer:Math.random()>0.3,
+          featured:Math.random()>0.7,
+          curated:'ok',published:true
+        };
         try{
-          const data=JSON.parse(line.slice(6));
-          if(data.type==='products'){document.getElementById('rv-stat-produtos').textContent=data.count;rvLog(`📦 ${data.count} products found`);}
-          if(data.type==='review'){
-            const total=parseInt(document.getElementById('rv-stat-criadas').textContent)+1;
-            document.getElementById('rv-stat-criadas').textContent=total;
-            if(data.stars===5)c5++;else c4++;
+          const r=await fetch('https://judge.me/api/v1/reviews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          if(r.status===200||r.status===201){
+            criadas++;
+            if(stars===5)c5++;else c4++;
             const tot=c5+c4,p5=Math.round(c5/tot*100),p4=100-p5;
+            document.getElementById('rv-stat-criadas').textContent=criadas;
             document.getElementById('bar5').style.width=p5+'%';document.getElementById('pct5').textContent=p5+'%';
             document.getElementById('bar4').style.width=p4+'%';document.getElementById('pct4').textContent=p4+'%';
-            const pp=Math.round(total/qty*100);
+            const pp=Math.round(criadas/qty*100);
             document.getElementById('rv-progress-bar').style.width=pp+'%';document.getElementById('rv-progress-pct').textContent=pp+'%';
-            document.getElementById('rv-progress-label').textContent=`${total}/${qty} reviews created`;
-            rvLog(`  ✅ [${total}/${qty}] ${data.name} — ${data.stars}⭐ ${data.img?'📸':''}`);
+            document.getElementById('rv-progress-label').textContent=`${criadas}/${qty} reviews created`;
+            rvLog(`  ✅ [${criadas}/${qty}] ${nome} — ${stars}⭐`);
+          } else {
+            const err=await r.json();rvLog(`  ⚠️ ${JSON.stringify(err)}`);
           }
-          if(data.type==='log')rvLog(data.msg);
-          if(data.type==='done'){document.getElementById('rv-done-banner').classList.add('active');document.getElementById('rv-progress-bar').style.width='100%';document.getElementById('rv-progress-pct').textContent='100%';}
-          if(data.type==='error')rvLog('❌ '+data.msg);
-        }catch{}
+        }catch(e){rvLog(`  ⚠️ ${e.message}`);}
+        await sleep(300);
       }
+      if(criadas>=qty)break;
     }
+    document.getElementById('rv-done-banner').classList.add('active');
+    document.getElementById('rv-progress-bar').style.width='100%';
+    document.getElementById('rv-progress-pct').textContent='100%';
+    rvLog(`🎉 Concluído! ${criadas} reviews criadas.`);
   }catch(err){rvLog('💥 '+err.message);}
   btn.disabled=false;btn.textContent='⭐ Generate Reviews';
 }
