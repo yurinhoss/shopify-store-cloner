@@ -737,6 +737,184 @@ app.post("/api/clone", async (req, res) => {
       }
     }
 
+    // ==== DESCONTOS ====
+    if (options.discounts) {
+      log("━━━━━━━━━━ ETAPA 11: DESCONTOS ━━━━━━━━━━");
+
+      // Busca descontos da origem via GraphQL
+      const queryDesc = `
+        query {
+          codeDiscountNodes(first: 100) {
+            edges {
+              node {
+                id
+                codeDiscount {
+                  ... on DiscountCodeBasic {
+                    title
+                    status
+                    codes(first: 10) { edges { node { code } } }
+                    customerGets {
+                      value {
+                        ... on DiscountPercentage { percentage }
+                        ... on DiscountAmount { amount { amount currencyCode } }
+                      }
+                    }
+                    minimumRequirement {
+                      ... on DiscountMinimumQuantity { greaterThanOrEqualToQuantity }
+                      ... on DiscountMinimumSubtotal { greaterThanOrEqualToSubtotal { amount currencyCode } }
+                    }
+                    usageLimit
+                    startsAt
+                    endsAt
+                  }
+                  ... on DiscountCodeFreeShipping {
+                    title
+                    status
+                    codes(first: 10) { edges { node { code } } }
+                    usageLimit
+                    startsAt
+                    endsAt
+                  }
+                  ... on DiscountCodeBxgy {
+                    title
+                    status
+                    codes(first: 10) { edges { node { code } } }
+                    usageLimit
+                    startsAt
+                    endsAt
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      try {
+        const dataDesc = await gql(origin.shop, queryDesc, {}, tokenOrig);
+        const descontos = dataDesc.codeDiscountNodes?.edges || [];
+        log(`🏷️ ${descontos.length} descontos encontrados na origem`);
+
+        let criados = 0, falha = 0;
+        for (const edge of descontos) {
+          const d = edge.node.codeDiscount;
+          if (!d?.title) continue;
+
+          const codes = (d.codes?.edges || []).map(e => e.node.code);
+          if (codes.length === 0) continue;
+
+          progress("discounts", ++criados, descontos.length);
+
+          try {
+            // Monta o desconto baseado no tipo
+            const isPercentage = d.customerGets?.value?.percentage !== undefined;
+            const percentage = d.customerGets?.value?.percentage;
+            const amount = d.customerGets?.value?.amount?.amount;
+
+            let mutation, variables;
+
+            if (isPercentage && percentage !== undefined) {
+              // Desconto percentual
+              mutation = `
+                mutation discountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
+                  discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
+                    codeDiscountNode { id }
+                    userErrors { field message code }
+                  }
+                }
+              `;
+              variables = {
+                basicCodeDiscount: {
+                  title: d.title,
+                  code: codes[0],
+                  startsAt: d.startsAt || new Date().toISOString(),
+                  endsAt: d.endsAt || null,
+                  usageLimit: d.usageLimit || null,
+                  customerGets: {
+                    value: { percentage: percentage },
+                    items: { all: true },
+                  },
+                  appliesOncePerCustomer: false,
+                },
+              };
+            } else if (amount) {
+              // Desconto em valor fixo
+              mutation = `
+                mutation discountCodeBasicCreate($basicCodeDiscount: DiscountCodeBasicInput!) {
+                  discountCodeBasicCreate(basicCodeDiscount: $basicCodeDiscount) {
+                    codeDiscountNode { id }
+                    userErrors { field message code }
+                  }
+                }
+              `;
+              variables = {
+                basicCodeDiscount: {
+                  title: d.title,
+                  code: codes[0],
+                  startsAt: d.startsAt || new Date().toISOString(),
+                  endsAt: d.endsAt || null,
+                  usageLimit: d.usageLimit || null,
+                  customerGets: {
+                    value: { discountAmount: { amount, appliesOnEachItem: false } },
+                    items: { all: true },
+                  },
+                  appliesOncePerCustomer: false,
+                },
+              };
+            } else {
+              // Frete grátis
+              mutation = `
+                mutation discountCodeFreeShippingCreate($freeShippingCodeDiscount: DiscountCodeFreeShippingInput!) {
+                  discountCodeFreeShippingCreate(freeShippingCodeDiscount: $freeShippingCodeDiscount) {
+                    codeDiscountNode { id }
+                    userErrors { field message code }
+                  }
+                }
+              `;
+              variables = {
+                freeShippingCodeDiscount: {
+                  title: d.title,
+                  code: codes[0],
+                  startsAt: d.startsAt || new Date().toISOString(),
+                  endsAt: d.endsAt || null,
+                  usageLimit: d.usageLimit || null,
+                  destination: { all: true },
+                },
+              };
+            }
+
+            const r = await gql(destination.shop, mutation, variables, tokenDest);
+            const erros = Object.values(r)[0]?.userErrors || [];
+            if (erros.length > 0 && !erros[0].message.includes("taken")) {
+              throw new Error(erros[0].message);
+            }
+
+            // Cria códigos extras se houver mais de 1
+            for (const code of codes.slice(1)) {
+              const nodeId = Object.values(r)[0]?.codeDiscountNode?.id;
+              if (!nodeId) continue;
+              try {
+                await gql(destination.shop, `
+                  mutation discountRedeemCodeBulkAdd($discountId: ID!, $codes: [DiscountRedeemCodeInput!]!) {
+                    discountRedeemCodeBulkAdd(discountId: $discountId, codes: $codes) {
+                      userErrors { message }
+                    }
+                  }
+                `, { discountId: nodeId, codes: [{ code }] }, tokenDest);
+              } catch {}
+            }
+
+          } catch (err) {
+            if (!err.message?.includes("taken")) falha++;
+          }
+          await sleep(300);
+        }
+        log(`✅ Descontos: ${criados - falha} copiados | ${falha} erros`, "success");
+      } catch (err) {
+        log(`⚠️ Sem permissão para descontos ou erro: ${err.message.slice(0, 80)}`, "error");
+      }
+    }
+
     send("done", { msg: "🎉 Clonagem completa!" });
   } catch (err) {
     send("error", { msg: `💥 Erro fatal: ${err.message}` });
