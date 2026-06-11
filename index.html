@@ -340,6 +340,7 @@
       <label class="option-item"><input type="checkbox" id="opt-theme" checked> Theme</label>
       <label class="option-item"><input type="checkbox" id="opt-markets" checked> 🌍 Markets</label>
       <label class="option-item"><input type="checkbox" id="opt-shipping" checked> 🚚 Shipping</label>
+      <label class="option-item"><input type="checkbox" id="opt-discounts" checked> 🏷️ Discounts</label>
     </div>
   </div>
 
@@ -432,6 +433,7 @@ async function startClone() {
     theme: document.getElementById('opt-theme').checked,
     markets: document.getElementById('opt-markets').checked,
     shipping: document.getElementById('opt-shipping').checked,
+    discounts: document.getElementById('opt-discounts').checked,
   };
 
   const btn = document.getElementById('btn-clone');
