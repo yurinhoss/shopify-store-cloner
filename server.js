@@ -172,12 +172,19 @@ app.post("/api/clone", async (req, res) => {
   }
 
   res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  if (res.flushHeaders) res.flushHeaders();
 
   const send = (type, data) => {
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
   };
+
+  // Keep-alive: envia comentário a cada 15s pra conexao nao cair (evita ERR_HTTP2_PROTOCOL_ERROR)
+  const keepAlive = setInterval(() => {
+    try { res.write(`: keepalive\n\n`); } catch {}
+  }, 15000);
 
   const log = (msg, status = "info") => send("log", { msg, status });
   const progress = (step, current, total) => send("progress", { step, current, total });
@@ -224,8 +231,8 @@ app.post("/api/clone", async (req, res) => {
       log(`⏭️ ${pulados} já existem, criando ${produtos.length - pulados} novos (5 em paralelo)...`);
 
       const novos = produtos.filter(p => !handlesDest.has(p.handle));
-      for (let i = 0; i < novos.length; i += 5) {
-        const chunk = novos.slice(i, i + 5);
+      for (let i = 0; i < novos.length; i += 8) {
+        const chunk = novos.slice(i, i + 8);
         await Promise.allSettled(chunk.map(async (p) => {
           try {
             const images = (p.images || []).map((img) => ({ src: img.src, alt: img.alt || "" }));
@@ -254,7 +261,7 @@ app.post("/api/clone", async (req, res) => {
             criados++;
           } catch (err) { falha++; }
         }));
-        progress("products", Math.min(i + 5, novos.length), novos.length);
+        progress("products", Math.min(i + 8, novos.length), novos.length);
         if (criados % 20 === 0 && criados > 0) log(`✅ ${criados} produtos criados...`);
         await sleep(50);
       }
@@ -333,12 +340,13 @@ app.post("/api/clone", async (req, res) => {
               });
               totalCollects++;
             } catch {}
-            await sleep(50);
+            await sleep(20);
           }
         } catch {}
-        await sleep(80);
+        await sleep(30);
       }
       log(`✅ Custom collections: ${criadosC} criadas | ${puladosC} existiam | ${totalCollects} collects`, "success");
+      await new Promise(r => setTimeout(r, 0)); // yield
     }
 
     // ==== PÁGINAS ====
@@ -438,33 +446,27 @@ app.post("/api/clone", async (req, res) => {
       // Mapa URL origem → URL destino (para substituir no tema depois)
       const urlMap = {};
       let uploaded = 0;
-      for (let i = 0; i < arquivos.length; i++) {
-        const arq = arquivos[i];
-        progress("files", i + 1, arquivos.length);
-        try {
-          // Baixa como base64 pra garantir o upload mesmo de CDN protegido
-          const b64 = await downloadBase64(arq.url);
-          if (b64) {
-            const ext = arq.filename.split(".").pop().toLowerCase();
-            const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
+      // Processa em paralelo (8 de cada vez) usando URL direta — MUITO mais rápido
+      const CONC = 8;
+      for (let i = 0; i < arquivos.length; i += CONC) {
+        const chunk = arquivos.slice(i, i + CONC);
+        await Promise.allSettled(chunk.map(async (arq) => {
+          try {
             const r = await gql(destination.shop,
               `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{...on MediaImage{image{url}}}userErrors{message}}}`,
-              { files: [{ originalSource: `data:${mime};base64,${b64}`, contentType: "IMAGE", filename: arq.filename }] },
+              { files: [{ originalSource: arq.url, alt: arq.alt, contentType: "IMAGE", filename: arq.filename }] },
               tokenDest);
             const novaUrl = r.fileCreate?.files?.[0]?.image?.url;
             if (novaUrl) urlMap[arq.url] = novaUrl;
             uploaded++;
-          } else {
-            // Fallback: passa URL diretamente
-            await gql(destination.shop, `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
-              { files: [{ originalSource: arq.url, alt: arq.alt, contentType: "IMAGE" }] }, tokenDest);
-            uploaded++;
-          }
-        } catch {}
-        await sleep(200);
+          } catch {}
+        }));
+        progress("files", Math.min(i + CONC, arquivos.length), arquivos.length);
+        if (uploaded % 100 === 0 && uploaded > 0) log(`📤 ${uploaded}/${arquivos.length} arquivos enviados...`);
+        await sleep(40);
       }
       log(`✅ Arquivos: ${uploaded} enviados | ${Object.keys(urlMap).length} URLs mapeadas`, "success");
-      await sleep(3000); // aguarda Shopify processar
+      await sleep(2000); // aguarda Shopify processar
 
       // Guarda urlMap no contexto para usar no tema
       if (Object.keys(urlMap).length > 0) {
@@ -919,6 +921,7 @@ app.post("/api/clone", async (req, res) => {
   } catch (err) {
     send("error", { msg: `💥 Erro fatal: ${err.message}` });
   }
+  clearInterval(keepAlive);
   res.end();
 });
 
