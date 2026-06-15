@@ -149,19 +149,74 @@ app.post("/api/auth", async (req, res) => {
   }
 });
 
+
+// ============================================================
+//  JOB SYSTEM — progresso persistente para reconexao
+// ============================================================
+const jobs = {};
+function createJob() {
+  const id = Math.random().toString(36).slice(2, 10);
+  jobs[id] = { logs: [], done: false, error: null, ts: Date.now(), listeners: [] };
+  // Limpa jobs velhos > 2h
+  for (const [k,v] of Object.entries(jobs)) if (Date.now()-v.ts>7200000) delete jobs[k];
+  return id;
+}
+function jobEmit(job, ev) {
+  job.logs.push(ev);
+  job.ts = Date.now();
+  for (const l of job.listeners) { try { l(ev); } catch {} }
+}
+
+// Cliente reconecta e recebe todos os eventos do job
+app.get("/api/clone-status/:id", (req, res) => {
+  const job = jobs[req.params.id];
+  if (!job) { res.status(404).end(); return; }
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  if (res.flushHeaders) res.flushHeaders();
+  // Replay logs já acumulados
+  for (const ev of job.logs) res.write(`data: ${JSON.stringify(ev)}\n\n`);
+  if (job.done) { res.end(); return; }
+  // Escuta novos eventos
+  const push = ev => { try { res.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {} };
+  job.listeners.push(push);
+  const ka = setInterval(() => { try { res.write(": ka\n\n"); } catch {} }, 10000);
+  req.on("close", () => {
+    clearInterval(ka);
+    job.listeners = job.listeners.filter(l => l !== push);
+  });
+});
+
+// Inicia clone — retorna jobId imediatamente
+app.post("/api/clone-start", (req, res) => {
+  const jobId = createJob();
+  res.json({ jobId });
+  const job = jobs[jobId];
+  const emit = ev => jobEmit(job, ev);
+  const send = (type, data) => emit({ type, ...data });
+  const log = (msg, status="info") => send("log", { msg, status });
+  const progress = (step, current, total) => send("progress", { step, current, total });
+  runClone(req.body, log, progress, send).then(() => {
+    job.done = true;
+  }).catch(err => {
+    job.error = err.message;
+    send("error", { msg: "💥 Erro fatal: " + err.message });
+    job.done = true;
+  });
+});
+
 // ============================================================
 //  API: CLONE (SSE — Server-Sent Events)
 // ============================================================
-app.post("/api/clone", async (req, res) => {
-  const { origin, destination, options, customize } = req.body;
-
+async function runClone({ origin, destination, options, customize }, log, progress, send) {
   // Função que substitui nome da loja e email em qualquer texto
   function replaceContent(text) {
     if (!text || typeof text !== 'string') return text;
     let result = text;
     if (customize?.originName && customize?.destName) {
       result = result.split(customize.originName).join(customize.destName);
-      // Também tenta case-insensitive
       const regex = new RegExp(customize.originName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
       result = result.replace(regex, customize.destName);
     }
@@ -170,24 +225,6 @@ app.post("/api/clone", async (req, res) => {
     }
     return result;
   }
-
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  if (res.flushHeaders) res.flushHeaders();
-
-  const send = (type, data) => {
-    res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
-  };
-
-  // Keep-alive: envia comentário a cada 15s pra conexao nao cair (evita ERR_HTTP2_PROTOCOL_ERROR)
-  const keepAlive = setInterval(() => {
-    try { res.write(`: keepalive\n\n`); } catch {}
-  }, 15000);
-
-  const log = (msg, status = "info") => send("log", { msg, status });
-  const progress = (step, current, total) => send("progress", { step, current, total });
 
   try {
     log("🔑 Autenticando nas duas lojas...");
@@ -550,23 +587,69 @@ app.post("/api/clone", async (req, res) => {
     if (options.markets) {
       log("━━━━━━━━━━ ETAPA 9: MARKETS GLOBAIS ━━━━━━━━━━");
 
+      // Mapa país → { name, locales: [primário, ...alternativos] }
+      // Locales: primeiro = idioma padrão do market, resto = alternativos (subpastas)
       const PAISES_MARKETS = [
-        {code:"DE",name:"Germany"},{code:"FR",name:"France"},{code:"IT",name:"Italy"},{code:"ES",name:"Spain"},
-        {code:"PT",name:"Portugal"},{code:"NL",name:"Netherlands"},{code:"BE",name:"Belgium"},{code:"AT",name:"Austria"},
-        {code:"IE",name:"Ireland"},{code:"LU",name:"Luxembourg"},{code:"GR",name:"Greece"},{code:"FI",name:"Finland"},
-        {code:"GB",name:"United Kingdom"},{code:"CH",name:"Switzerland"},{code:"SE",name:"Sweden"},{code:"NO",name:"Norway"},
-        {code:"DK",name:"Denmark"},{code:"PL",name:"Poland"},{code:"CZ",name:"Czech Republic"},{code:"HU",name:"Hungary"},
-        {code:"RO",name:"Romania"},{code:"BG",name:"Bulgaria"},{code:"HR",name:"Croatia"},{code:"SK",name:"Slovakia"},
-        {code:"CY",name:"Cyprus"},{code:"EE",name:"Estonia"},{code:"LV",name:"Latvia"},{code:"LT",name:"Lithuania"},
-        {code:"SI",name:"Slovenia"},{code:"MT",name:"Malta"},
-        {code:"US",name:"United States"},{code:"CA",name:"Canada"},{code:"MX",name:"Mexico"},
-        {code:"BR",name:"Brazil"},{code:"AR",name:"Argentina"},{code:"CL",name:"Chile"},{code:"CO",name:"Colombia"},
-        {code:"PE",name:"Peru"},{code:"UY",name:"Uruguay"},{code:"EC",name:"Ecuador"},
-        {code:"JP",name:"Japan"},{code:"KR",name:"South Korea"},{code:"SG",name:"Singapore"},
-        {code:"HK",name:"Hong Kong"},{code:"TW",name:"Taiwan"},{code:"AU",name:"Australia"},{code:"NZ",name:"New Zealand"},
-        {code:"CN",name:"China"},{code:"IN",name:"India"},{code:"TH",name:"Thailand"},
-        {code:"AE",name:"UAE"},{code:"IL",name:"Israel"},{code:"SA",name:"Saudi Arabia"},
-        {code:"ZA",name:"South Africa"},{code:"MA",name:"Morocco"},{code:"TR",name:"Turkey"},
+        // Europa — idioma oficial + inglês de reserva
+        {code:"DE",name:"Germany",      locales:["de","en"]},
+        {code:"FR",name:"France",       locales:["fr","en"]},
+        {code:"IT",name:"Italy",        locales:["it","en"]},
+        {code:"ES",name:"Spain",        locales:["es","en"]},
+        {code:"PT",name:"Portugal",     locales:["pt-PT","en"]},
+        {code:"NL",name:"Netherlands",  locales:["nl","en"]},
+        {code:"BE",name:"Belgium",      locales:["fr","nl","de","en"]},
+        {code:"AT",name:"Austria",      locales:["de","en"]},
+        {code:"IE",name:"Ireland",      locales:["en"]},
+        {code:"LU",name:"Luxembourg",   locales:["fr","de","en"]},
+        {code:"GR",name:"Greece",       locales:["el","en"]},
+        {code:"FI",name:"Finland",      locales:["fi","sv","en"]},
+        {code:"GB",name:"United Kingdom",locales:["en"]},
+        {code:"CH",name:"Switzerland",  locales:["de","fr","it","en"]},
+        {code:"SE",name:"Sweden",       locales:["sv","en"]},
+        {code:"NO",name:"Norway",       locales:["nb","en"]},
+        {code:"DK",name:"Denmark",      locales:["da","en"]},
+        {code:"PL",name:"Poland",       locales:["pl","en"]},
+        {code:"CZ",name:"Czech Republic",locales:["cs","en"]},
+        {code:"HU",name:"Hungary",      locales:["hu","en"]},
+        {code:"RO",name:"Romania",      locales:["ro","en"]},
+        {code:"BG",name:"Bulgaria",     locales:["bg","en"]},
+        {code:"HR",name:"Croatia",      locales:["hr","en"]},
+        {code:"SK",name:"Slovakia",     locales:["sk","cs","en"]},
+        {code:"CY",name:"Cyprus",       locales:["el","en"]},
+        {code:"EE",name:"Estonia",      locales:["et","en"]},
+        {code:"LV",name:"Latvia",       locales:["lv","en"]},
+        {code:"LT",name:"Lithuania",    locales:["lt","en"]},
+        {code:"SI",name:"Slovenia",     locales:["sl","en"]},
+        {code:"MT",name:"Malta",        locales:["mt","en"]},
+        // Américas
+        {code:"US",name:"United States",locales:["en","es"]},
+        {code:"CA",name:"Canada",       locales:["en","fr"]},
+        {code:"MX",name:"Mexico",       locales:["es","en"]},
+        {code:"BR",name:"Brazil",       locales:["pt-BR","en"]},
+        {code:"AR",name:"Argentina",    locales:["es","en"]},
+        {code:"CL",name:"Chile",        locales:["es","en"]},
+        {code:"CO",name:"Colombia",     locales:["es","en"]},
+        {code:"PE",name:"Peru",         locales:["es","en"]},
+        {code:"UY",name:"Uruguay",      locales:["es","en"]},
+        {code:"EC",name:"Ecuador",      locales:["es","en"]},
+        // Ásia/Pacífico
+        {code:"JP",name:"Japan",        locales:["ja","en"]},
+        {code:"KR",name:"South Korea",  locales:["ko","en"]},
+        {code:"SG",name:"Singapore",    locales:["en","zh"]},
+        {code:"HK",name:"Hong Kong",    locales:["zh","en"]},
+        {code:"TW",name:"Taiwan",       locales:["zh","en"]},
+        {code:"AU",name:"Australia",    locales:["en"]},
+        {code:"NZ",name:"New Zealand",  locales:["en"]},
+        {code:"CN",name:"China",        locales:["zh","en"]},
+        {code:"IN",name:"India",        locales:["en","hi"]},
+        {code:"TH",name:"Thailand",     locales:["th","en"]},
+        // Oriente Médio / África
+        {code:"AE",name:"UAE",          locales:["ar","en"]},
+        {code:"IL",name:"Israel",       locales:["he","en"]},
+        {code:"SA",name:"Saudi Arabia", locales:["ar","en"]},
+        {code:"ZA",name:"South Africa", locales:["en","af"]},
+        {code:"MA",name:"Morocco",      locales:["fr","ar","en"]},
+        {code:"TR",name:"Turkey",       locales:["tr","en"]},
       ];
 
       // Lista países já em markets INDIVIDUAIS (ignora Global/International)
@@ -600,23 +683,65 @@ app.post("/api/clone", async (req, res) => {
       const novos = PAISES_MARKETS.filter(p => !existingCountries.has(p.code));
       log(`🌍 ${existingCountries.size} países já cobertos | ${novos.length} a criar`);
 
+      // Pega locales instalados na loja destino
+      let installedLocales = new Set();
+      try {
+        const locData = await gql(destination.shop, `query { shopLocales { locale published } }`, {}, tokenDest);
+        for (const l of locData.shopLocales) installedLocales.add(l.locale);
+      } catch {}
+      log(`🌐 ${installedLocales.size} locales instalados na loja`);
+
       let mkCriados = 0;
       for (let i = 0; i < novos.length; i++) {
         const p = novos[i];
         progress("markets", i + 1, novos.length);
         try {
-          const r = await gql(destination.shop, `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id}userErrors{field message}}}`,
+          // Cria o market
+          const r = await gql(destination.shop,
+            `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id name}userErrors{field message}}}`,
             { input: { name: p.name, enabled: true, regions: [{ countryCode: p.code }] } }, tokenDest);
-          if (r.marketCreate.userErrors.length === 0) {
+
+          if (r.marketCreate?.userErrors?.length === 0 && r.marketCreate?.market?.id) {
+            const marketId = r.marketCreate.market.id;
             mkCriados++;
-            // Tenta ativar moeda local
+
+            // Filtra locales disponíveis neste market
+            const marketLocales = (p.locales || ["en"]).filter(l => installedLocales.has(l));
+            const primaryLocale = marketLocales[0] || "en";
+            const alternateLocales = marketLocales.slice(1);
+
+            // Configura web presence (subpastas + idiomas)
+            if (marketLocales.length > 0) {
+              try {
+                await gql(destination.shop, `
+                  mutation webPresenceCreate($marketId: ID!, $input: MarketWebPresenceCreateInput!) {
+                    marketWebPresenceCreate(marketId: $marketId, webPresence: $input) {
+                      webPresence { id defaultLocale { locale } }
+                      userErrors { field message }
+                    }
+                  }`,
+                  {
+                    marketId,
+                    input: {
+                      defaultLocale: primaryLocale,
+                      alternateLocales: alternateLocales,
+                      subfolderSuffix: p.code.toLowerCase(),
+                    }
+                  }, tokenDest);
+              } catch {}
+            }
+
+            // Moeda: EUR para Europa, local para resto
+            const euroCountries = new Set(["DE","FR","IT","ES","PT","NL","BE","AT","IE","LU","GR","FI","CY","EE","LV","LT","SI","MT","SK"]);
+            const useCurrencyLocal = !euroCountries.has(p.code);
             try {
-              await gql(destination.shop, `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
-                { id: r.marketCreate.market.id, i: { localCurrencies: true } }, tokenDest);
+              await gql(destination.shop,
+                `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
+                { id: marketId, i: { localCurrencies: useCurrencyLocal } }, tokenDest);
             } catch {}
           }
         } catch {}
-        await sleep(100);
+        await sleep(150);
       }
       log(`✅ Markets: ${mkCriados} criados | ${existingCountries.size} já existiam`, "success");
     }
@@ -935,10 +1060,30 @@ app.post("/api/clone", async (req, res) => {
     }
 
     send("done", { msg: "🎉 Clonagem completa!" });
-  } catch (err) {
-    send("error", { msg: `💥 Erro fatal: ${err.message}` });
+  } catch(err) {
+    send("error", { msg: "💥 Erro fatal: " + err.message });
+    throw err;
   }
-  clearInterval(keepAlive);
+}
+
+// Endpoint legado SSE (mantém compatibilidade)
+app.post("/api/clone", async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  if (res.flushHeaders) res.flushHeaders();
+  const send = (type, data) => { try { res.write(`data: ${JSON.stringify({type,...data})}\n\n`); } catch {} };
+  const log = (msg, status="info") => send("log", {msg, status});
+  const progress = (step, current, total) => send("progress", {step, current, total});
+  const ka = setInterval(() => { try { res.write(": ka\n\n"); } catch {} }, 10000);
+  try {
+    await runClone(req.body, log, progress, send);
+    send("done", { msg: "🎉 Clonagem completa!" });
+  } catch(err) {
+    send("error", { msg: "💥 Erro fatal: " + err.message });
+  }
+  clearInterval(ka);
   res.end();
 });
 
