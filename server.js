@@ -474,6 +474,14 @@ app.post("/api/clone", async (req, res) => {
         // Armazena no objeto customize para reutilizar no tema
         customize._urlMap = urlMap;
         customize._originShopCDN = origin.shop.replace(".myshopify.com", "");
+        // Mapa por nome de arquivo (mais robusto para banners/seções do tema)
+        const fileMap = {};
+        for (const [origUrl, destUrl] of Object.entries(urlMap)) {
+          const fname = origUrl.split("/").pop().split("?")[0];
+          if (fname) fileMap[fname] = destUrl;
+        }
+        customize._fileMap = fileMap;
+        log(`🗂️ ${Object.keys(fileMap).length} arquivos mapeados por nome`);
       }
     }
 
@@ -510,6 +518,15 @@ app.post("/api/clone", async (req, res) => {
                   const origBase = origUrl.split("?")[0];
                   const destBase = destUrl.split("?")[0];
                   if (origBase !== origUrl) value = value.split(origBase).join(destBase);
+                }
+              }
+              // Mapeia por NOME DO ARQUIVO (mais robusto p/ banners e seções)
+              // O mesmo arquivo tem nome igual nas duas lojas, só muda o ID do CDN
+              if (customize._fileMap) {
+                for (const [filename, destUrl] of Object.entries(customize._fileMap)) {
+                  // Regex: qualquer URL de cdn.shopify que termine com esse filename
+                  const re = new RegExp("https?://cdn\\.shopify\\.com/[^\"'\\s)]*" + filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[^\"'\\s)]*", "g");
+                  value = value.replace(re, destUrl.split("?")[0]);
                 }
               }
               // Substitui referências ao shop da origem (shopify CDN genérico)
