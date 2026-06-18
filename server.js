@@ -149,74 +149,19 @@ app.post("/api/auth", async (req, res) => {
   }
 });
 
-
-// ============================================================
-//  JOB SYSTEM — progresso persistente para reconexao
-// ============================================================
-const jobs = {};
-function createJob() {
-  const id = Math.random().toString(36).slice(2, 10);
-  jobs[id] = { logs: [], done: false, error: null, ts: Date.now(), listeners: [] };
-  // Limpa jobs velhos > 2h
-  for (const [k,v] of Object.entries(jobs)) if (Date.now()-v.ts>7200000) delete jobs[k];
-  return id;
-}
-function jobEmit(job, ev) {
-  job.logs.push(ev);
-  job.ts = Date.now();
-  for (const l of job.listeners) { try { l(ev); } catch {} }
-}
-
-// Cliente reconecta e recebe todos os eventos do job
-app.get("/api/clone-status/:id", (req, res) => {
-  const job = jobs[req.params.id];
-  if (!job) { res.status(404).end(); return; }
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  if (res.flushHeaders) res.flushHeaders();
-  // Replay logs já acumulados
-  for (const ev of job.logs) res.write(`data: ${JSON.stringify(ev)}\n\n`);
-  if (job.done) { res.end(); return; }
-  // Escuta novos eventos
-  const push = ev => { try { res.write(`data: ${JSON.stringify(ev)}\n\n`); } catch {} };
-  job.listeners.push(push);
-  const ka = setInterval(() => { try { res.write(": ka\n\n"); } catch {} }, 10000);
-  req.on("close", () => {
-    clearInterval(ka);
-    job.listeners = job.listeners.filter(l => l !== push);
-  });
-});
-
-// Inicia clone — retorna jobId imediatamente
-app.post("/api/clone-start", (req, res) => {
-  const jobId = createJob();
-  res.json({ jobId });
-  const job = jobs[jobId];
-  const emit = ev => jobEmit(job, ev);
-  const send = (type, data) => emit({ type, ...data });
-  const log = (msg, status="info") => send("log", { msg, status });
-  const progress = (step, current, total) => send("progress", { step, current, total });
-  runClone(req.body, log, progress, send).then(() => {
-    job.done = true;
-  }).catch(err => {
-    job.error = err.message;
-    send("error", { msg: "💥 Erro fatal: " + err.message });
-    job.done = true;
-  });
-});
-
 // ============================================================
 //  API: CLONE (SSE — Server-Sent Events)
 // ============================================================
-async function runClone({ origin, destination, options, customize }, log, progress, send) {
+app.post("/api/clone", async (req, res) => {
+  const { origin, destination, options, customize } = req.body;
+
   // Função que substitui nome da loja e email em qualquer texto
   function replaceContent(text) {
     if (!text || typeof text !== 'string') return text;
     let result = text;
     if (customize?.originName && customize?.destName) {
       result = result.split(customize.originName).join(customize.destName);
+      // Também tenta case-insensitive
       const regex = new RegExp(customize.originName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
       result = result.replace(regex, customize.destName);
     }
@@ -225,6 +170,17 @@ async function runClone({ origin, destination, options, customize }, log, progre
     }
     return result;
   }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const send = (type, data) => {
+    res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+  };
+
+  const log = (msg, status = "info") => send("log", { msg, status });
+  const progress = (step, current, total) => send("progress", { step, current, total });
 
   try {
     log("🔑 Autenticando nas duas lojas...");
@@ -268,8 +224,8 @@ async function runClone({ origin, destination, options, customize }, log, progre
       log(`⏭️ ${pulados} já existem, criando ${produtos.length - pulados} novos (5 em paralelo)...`);
 
       const novos = produtos.filter(p => !handlesDest.has(p.handle));
-      for (let i = 0; i < novos.length; i += 8) {
-        const chunk = novos.slice(i, i + 8);
+      for (let i = 0; i < novos.length; i += 5) {
+        const chunk = novos.slice(i, i + 5);
         await Promise.allSettled(chunk.map(async (p) => {
           try {
             const images = (p.images || []).map((img) => ({ src: img.src, alt: img.alt || "" }));
@@ -298,7 +254,7 @@ async function runClone({ origin, destination, options, customize }, log, progre
             criados++;
           } catch (err) { falha++; }
         }));
-        progress("products", Math.min(i + 8, novos.length), novos.length);
+        progress("products", Math.min(i + 5, novos.length), novos.length);
         if (criados % 20 === 0 && criados > 0) log(`✅ ${criados} produtos criados...`);
         await sleep(50);
       }
@@ -377,13 +333,12 @@ async function runClone({ origin, destination, options, customize }, log, progre
               });
               totalCollects++;
             } catch {}
-            await sleep(20);
+            await sleep(50);
           }
         } catch {}
-        await sleep(30);
+        await sleep(80);
       }
       log(`✅ Custom collections: ${criadosC} criadas | ${puladosC} existiam | ${totalCollects} collects`, "success");
-      await new Promise(r => setTimeout(r, 0)); // yield
     }
 
     // ==== PÁGINAS ====
@@ -483,27 +438,33 @@ async function runClone({ origin, destination, options, customize }, log, progre
       // Mapa URL origem → URL destino (para substituir no tema depois)
       const urlMap = {};
       let uploaded = 0;
-      // Processa em paralelo (8 de cada vez) usando URL direta — MUITO mais rápido
-      const CONC = 8;
-      for (let i = 0; i < arquivos.length; i += CONC) {
-        const chunk = arquivos.slice(i, i + CONC);
-        await Promise.allSettled(chunk.map(async (arq) => {
-          try {
+      for (let i = 0; i < arquivos.length; i++) {
+        const arq = arquivos[i];
+        progress("files", i + 1, arquivos.length);
+        try {
+          // Baixa como base64 pra garantir o upload mesmo de CDN protegido
+          const b64 = await downloadBase64(arq.url);
+          if (b64) {
+            const ext = arq.filename.split(".").pop().toLowerCase();
+            const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
             const r = await gql(destination.shop,
               `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{...on MediaImage{image{url}}}userErrors{message}}}`,
-              { files: [{ originalSource: arq.url, alt: arq.alt, contentType: "IMAGE", filename: arq.filename }] },
+              { files: [{ originalSource: `data:${mime};base64,${b64}`, contentType: "IMAGE", filename: arq.filename }] },
               tokenDest);
             const novaUrl = r.fileCreate?.files?.[0]?.image?.url;
             if (novaUrl) urlMap[arq.url] = novaUrl;
             uploaded++;
-          } catch {}
-        }));
-        progress("files", Math.min(i + CONC, arquivos.length), arquivos.length);
-        if (uploaded % 100 === 0 && uploaded > 0) log(`📤 ${uploaded}/${arquivos.length} arquivos enviados...`);
-        await sleep(40);
+          } else {
+            // Fallback: passa URL diretamente
+            await gql(destination.shop, `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
+              { files: [{ originalSource: arq.url, alt: arq.alt, contentType: "IMAGE" }] }, tokenDest);
+            uploaded++;
+          }
+        } catch {}
+        await sleep(200);
       }
       log(`✅ Arquivos: ${uploaded} enviados | ${Object.keys(urlMap).length} URLs mapeadas`, "success");
-      await sleep(2000); // aguarda Shopify processar
+      await sleep(3000); // aguarda Shopify processar
 
       // Guarda urlMap no contexto para usar no tema
       if (Object.keys(urlMap).length > 0) {
@@ -511,14 +472,6 @@ async function runClone({ origin, destination, options, customize }, log, progre
         // Armazena no objeto customize para reutilizar no tema
         customize._urlMap = urlMap;
         customize._originShopCDN = origin.shop.replace(".myshopify.com", "");
-        // Mapa por nome de arquivo (mais robusto para banners/seções do tema)
-        const fileMap = {};
-        for (const [origUrl, destUrl] of Object.entries(urlMap)) {
-          const fname = origUrl.split("/").pop().split("?")[0];
-          if (fname) fileMap[fname] = destUrl;
-        }
-        customize._fileMap = fileMap;
-        log(`🗂️ ${Object.keys(fileMap).length} arquivos mapeados por nome`);
       }
     }
 
@@ -557,15 +510,6 @@ async function runClone({ origin, destination, options, customize }, log, progre
                   if (origBase !== origUrl) value = value.split(origBase).join(destBase);
                 }
               }
-              // Mapeia por NOME DO ARQUIVO (mais robusto p/ banners e seções)
-              // O mesmo arquivo tem nome igual nas duas lojas, só muda o ID do CDN
-              if (customize._fileMap) {
-                for (const [filename, destUrl] of Object.entries(customize._fileMap)) {
-                  // Regex: qualquer URL de cdn.shopify que termine com esse filename
-                  const re = new RegExp("https?://cdn\\.shopify\\.com/[^\"'\\s)]*" + filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[^\"'\\s)]*", "g");
-                  value = value.replace(re, destUrl.split("?")[0]);
-                }
-              }
               // Substitui referências ao shop da origem (shopify CDN genérico)
               if (customize._originShopCDN) {
                 value = value.split(customize._originShopCDN).join(destination.shop.replace(".myshopify.com", ""));
@@ -587,163 +531,159 @@ async function runClone({ origin, destination, options, customize }, log, progre
     if (options.markets) {
       log("━━━━━━━━━━ ETAPA 9: MARKETS GLOBAIS ━━━━━━━━━━");
 
-      // Mapa país → { name, locales: [primário, ...alternativos] }
-      // Locales: primeiro = idioma padrão do market, resto = alternativos (subpastas)
-      const PAISES_MARKETS = [
-        // Europa — idioma oficial + inglês de reserva
-        {code:"DE",name:"Germany",      locales:["de","en"]},
-        {code:"FR",name:"France",       locales:["fr","en"]},
-        {code:"IT",name:"Italy",        locales:["it","en"]},
-        {code:"ES",name:"Spain",        locales:["es","en"]},
-        {code:"PT",name:"Portugal",     locales:["pt-PT","en"]},
-        {code:"NL",name:"Netherlands",  locales:["nl","en"]},
-        {code:"BE",name:"Belgium",      locales:["fr","nl","de","en"]},
-        {code:"AT",name:"Austria",      locales:["de","en"]},
-        {code:"IE",name:"Ireland",      locales:["en"]},
-        {code:"LU",name:"Luxembourg",   locales:["fr","de","en"]},
-        {code:"GR",name:"Greece",       locales:["el","en"]},
-        {code:"FI",name:"Finland",      locales:["fi","sv","en"]},
-        {code:"GB",name:"United Kingdom",locales:["en"]},
-        {code:"CH",name:"Switzerland",  locales:["de","fr","it","en"]},
-        {code:"SE",name:"Sweden",       locales:["sv","en"]},
-        {code:"NO",name:"Norway",       locales:["nb","en"]},
-        {code:"DK",name:"Denmark",      locales:["da","en"]},
-        {code:"PL",name:"Poland",       locales:["pl","en"]},
-        {code:"CZ",name:"Czech Republic",locales:["cs","en"]},
-        {code:"HU",name:"Hungary",      locales:["hu","en"]},
-        {code:"RO",name:"Romania",      locales:["ro","en"]},
-        {code:"BG",name:"Bulgaria",     locales:["bg","en"]},
-        {code:"HR",name:"Croatia",      locales:["hr","en"]},
-        {code:"SK",name:"Slovakia",     locales:["sk","cs","en"]},
-        {code:"CY",name:"Cyprus",       locales:["el","en"]},
-        {code:"EE",name:"Estonia",      locales:["et","en"]},
-        {code:"LV",name:"Latvia",       locales:["lv","en"]},
-        {code:"LT",name:"Lithuania",    locales:["lt","en"]},
-        {code:"SI",name:"Slovenia",     locales:["sl","en"]},
-        {code:"MT",name:"Malta",        locales:["mt","en"]},
+      // Mapa país → idioma primário + moeda
+      // Idiomas disponíveis: de, es, fr, cs, da, el, fi, hu, it, ja, nl, no, pl, pt-PT, ro, sv, tr, bg, sk, hr
+      const MARKET_MAP = {
+        // Europeus — EUR
+        "DE": { name:"Germany",         lang:"de",    currency:"EUR" },
+        "AT": { name:"Austria",          lang:"de",    currency:"EUR" },
+        "FR": { name:"France",           lang:"fr",    currency:"EUR" },
+        "BE": { name:"Belgium",          lang:"fr",    currency:"EUR" },
+        "LU": { name:"Luxembourg",       lang:"fr",    currency:"EUR" },
+        "IT": { name:"Italy",            lang:"it",    currency:"EUR" },
+        "ES": { name:"Spain",            lang:"es",    currency:"EUR" },
+        "PT": { name:"Portugal",         lang:"pt-PT", currency:"EUR" },
+        "NL": { name:"Netherlands",      lang:"nl",    currency:"EUR" },
+        "GR": { name:"Greece",           lang:"el",    currency:"EUR" },
+        "FI": { name:"Finland",          lang:"fi",    currency:"EUR" },
+        "IE": { name:"Ireland",          lang:"en",    currency:"EUR" },
+        "SK": { name:"Slovakia",         lang:"sk",    currency:"EUR" },
+        "HR": { name:"Croatia",          lang:"hr",    currency:"EUR" },
+        "CY": { name:"Cyprus",           lang:"el",    currency:"EUR" },
+        "EE": { name:"Estonia",          lang:null,    currency:"EUR" },
+        "LV": { name:"Latvia",           lang:null,    currency:"EUR" },
+        "LT": { name:"Lithuania",        lang:null,    currency:"EUR" },
+        "SI": { name:"Slovenia",         lang:null,    currency:"EUR" },
+        "MT": { name:"Malta",            lang:"en",    currency:"EUR" },
+        // Europeus — moeda própria
+        "GB": { name:"United Kingdom",   lang:"en",    currency:"GBP" },
+        "CH": { name:"Switzerland",      lang:"de",    currency:"CHF" },
+        "SE": { name:"Sweden",           lang:"sv",    currency:"SEK" },
+        "NO": { name:"Norway",           lang:"no",    currency:"NOK" },
+        "DK": { name:"Denmark",          lang:"da",    currency:"DKK" },
+        "PL": { name:"Poland",           lang:"pl",    currency:"PLN" },
+        "CZ": { name:"Czech Republic",   lang:"cs",    currency:"CZK" },
+        "HU": { name:"Hungary",          lang:"hu",    currency:"HUF" },
+        "RO": { name:"Romania",          lang:"ro",    currency:"RON" },
+        "BG": { name:"Bulgaria",         lang:"bg",    currency:"BGN" },
+        "TR": { name:"Turkey",           lang:"tr",    currency:"TRY" },
         // Américas
-        {code:"US",name:"United States",locales:["en","es"]},
-        {code:"CA",name:"Canada",       locales:["en","fr"]},
-        {code:"MX",name:"Mexico",       locales:["es","en"]},
-        {code:"BR",name:"Brazil",       locales:["pt-BR","en"]},
-        {code:"AR",name:"Argentina",    locales:["es","en"]},
-        {code:"CL",name:"Chile",        locales:["es","en"]},
-        {code:"CO",name:"Colombia",     locales:["es","en"]},
-        {code:"PE",name:"Peru",         locales:["es","en"]},
-        {code:"UY",name:"Uruguay",      locales:["es","en"]},
-        {code:"EC",name:"Ecuador",      locales:["es","en"]},
-        // Ásia/Pacífico
-        {code:"JP",name:"Japan",        locales:["ja","en"]},
-        {code:"KR",name:"South Korea",  locales:["ko","en"]},
-        {code:"SG",name:"Singapore",    locales:["en","zh"]},
-        {code:"HK",name:"Hong Kong",    locales:["zh","en"]},
-        {code:"TW",name:"Taiwan",       locales:["zh","en"]},
-        {code:"AU",name:"Australia",    locales:["en"]},
-        {code:"NZ",name:"New Zealand",  locales:["en"]},
-        {code:"CN",name:"China",        locales:["zh","en"]},
-        {code:"IN",name:"India",        locales:["en","hi"]},
-        {code:"TH",name:"Thailand",     locales:["th","en"]},
-        // Oriente Médio / África
-        {code:"AE",name:"UAE",          locales:["ar","en"]},
-        {code:"IL",name:"Israel",       locales:["he","en"]},
-        {code:"SA",name:"Saudi Arabia", locales:["ar","en"]},
-        {code:"ZA",name:"South Africa", locales:["en","af"]},
-        {code:"MA",name:"Morocco",      locales:["fr","ar","en"]},
-        {code:"TR",name:"Turkey",       locales:["tr","en"]},
-      ];
+        "US": { name:"United States",    lang:"en",    currency:"USD" },
+        "CA": { name:"Canada",           lang:"en",    currency:"CAD" },
+        "MX": { name:"Mexico",           lang:"es",    currency:"MXN" },
+        "BR": { name:"Brazil",           lang:null,    currency:"BRL" },
+        "AR": { name:"Argentina",        lang:"es",    currency:"ARS" },
+        "CL": { name:"Chile",            lang:"es",    currency:"CLP" },
+        "CO": { name:"Colombia",         lang:"es",    currency:"COP" },
+        "PE": { name:"Peru",             lang:"es",    currency:"PEN" },
+        "UY": { name:"Uruguay",          lang:"es",    currency:"UYU" },
+        "EC": { name:"Ecuador",          lang:"es",    currency:"USD" },
+        // Ásia / Pacífico
+        "JP": { name:"Japan",            lang:"ja",    currency:"JPY" },
+        "KR": { name:"South Korea",      lang:null,    currency:"KRW" },
+        "SG": { name:"Singapore",        lang:"en",    currency:"SGD" },
+        "HK": { name:"Hong Kong",        lang:null,    currency:"HKD" },
+        "TW": { name:"Taiwan",           lang:null,    currency:"TWD" },
+        "AU": { name:"Australia",        lang:"en",    currency:"AUD" },
+        "NZ": { name:"New Zealand",      lang:"en",    currency:"NZD" },
+        "CN": { name:"China",            lang:null,    currency:"CNY" },
+        "IN": { name:"India",            lang:"en",    currency:"INR" },
+        "TH": { name:"Thailand",         lang:null,    currency:"THB" },
+        // Médio Oriente / África
+        "AE": { name:"UAE",              lang:null,    currency:"AED" },
+        "SA": { name:"Saudi Arabia",     lang:null,    currency:"SAR" },
+        "IL": { name:"Israel",           lang:null,    currency:"ILS" },
+        "ZA": { name:"South Africa",     lang:"en",    currency:"ZAR" },
+        "MA": { name:"Morocco",          lang:"fr",    currency:"MAD" },
+        // Europa extra
+        "AL": { name:"Albania",          lang:null,    currency:"ALL" },
+        "BA": { name:"Bosnia",           lang:null,    currency:"BAM" },
+        "RS": { name:"Serbia",           lang:null,    currency:"RSD" },
+        "MK": { name:"North Macedonia",  lang:null,    currency:"MKD" },
+        "IS": { name:"Iceland",          lang:null,    currency:"ISK" },
+        "ME": { name:"Montenegro",       lang:null,    currency:"EUR" },
+        "XK": { name:"Kosovo",           lang:null,    currency:"EUR" },
+        "MD": { name:"Moldova",          lang:"ro",    currency:"MDL" },
+        // Médio Oriente extra
+        "EG": { name:"Egypt",            lang:null,    currency:"EGP" },
+        "QA": { name:"Qatar",            lang:null,    currency:"QAR" },
+        "KW": { name:"Kuwait",           lang:null,    currency:"KWD" },
+        // África extra
+        "NG": { name:"Nigeria",          lang:"en",    currency:"NGN" },
+        "KE": { name:"Kenya",            lang:"en",    currency:"KES" },
+        "GH": { name:"Ghana",            lang:"en",    currency:"GHS" },
+        "TZ": { name:"Tanzania",         lang:"en",    currency:"TZS" },
+        // Ásia extra
+        "PH": { name:"Philippines",      lang:"en",    currency:"PHP" },
+        "MY": { name:"Malaysia",         lang:"en",    currency:"MYR" },
+        "ID": { name:"Indonesia",        lang:null,    currency:"IDR" },
+        "VN": { name:"Vietnam",          lang:null,    currency:"VND" },
+        "PK": { name:"Pakistan",         lang:"en",    currency:"PKR" },
+        "BD": { name:"Bangladesh",       lang:"en",    currency:"BDT" },
+        // América Latina extra
+        "GT": { name:"Guatemala",        lang:"es",    currency:"GTQ" },
+        "DO": { name:"Dominican Rep.",   lang:"es",    currency:"DOP" },
+        "BO": { name:"Bolivia",          lang:"es",    currency:"BOB" },
+        "PY": { name:"Paraguay",         lang:"es",    currency:"PYG" },
+        "VE": { name:"Venezuela",        lang:"es",    currency:"USD" },
+        "CR": { name:"Costa Rica",       lang:"es",    currency:"CRC" },
+        "PA": { name:"Panama",           lang:"es",    currency:"USD" },
+      };
 
-      // Lista países já em markets INDIVIDUAIS (ignora Global/International)
+      // Lista países já em markets
       const existingCountries = new Set();
       try {
         const mData = await gql(destination.shop, `
-          query {
-            markets(first: 100) {
-              edges {
-                node {
-                  name
-                  regions(first: 100) {
-                    edges { node { ... on MarketRegionCountry { code } } }
-                  }
-                }
-              }
-            }
-          }
+          query { markets(first: 100) { edges { node { name regions(first: 100) { edges { node { ... on MarketRegionCountry { code } } } } } } } }
         `, {}, tokenDest);
         for (const e of mData.markets.edges) {
           const regionCount = e.node.regions.edges.length;
-          // Pula markets com muitos países (Global/International = catch-all)
-          if (regionCount > 10) {
-            log(`⏭️ Ignorando market "${e.node.name}" (${regionCount} países — catch-all)`);
-            continue;
-          }
+          if (regionCount > 10) { log(`⏭️ Ignorando market "${e.node.name}" (${regionCount} países — catch-all)`); continue; }
           for (const r of e.node.regions.edges) if (r.node.code) existingCountries.add(r.node.code);
         }
       } catch {}
 
-      const novos = PAISES_MARKETS.filter(p => !existingCountries.has(p.code));
-      log(`🌍 ${existingCountries.size} países já cobertos | ${novos.length} a criar`);
-
-      // Pega locales instalados na loja destino
-      let installedLocales = new Set();
-      try {
-        const locData = await gql(destination.shop, `query { shopLocales { locale published } }`, {}, tokenDest);
-        for (const l of locData.shopLocales) installedLocales.add(l.locale);
-      } catch {}
-      log(`🌐 ${installedLocales.size} locales instalados na loja`);
+      const paisesParaCriar = Object.entries(MARKET_MAP).filter(([code]) => !existingCountries.has(code));
+      log(`🌍 ${existingCountries.size} países já cobertos | ${paisesParaCriar.length} a criar`);
 
       let mkCriados = 0;
-      for (let i = 0; i < novos.length; i++) {
-        const p = novos[i];
-        progress("markets", i + 1, novos.length);
+      for (let i = 0; i < paisesParaCriar.length; i++) {
+        const [code, cfg] = paisesParaCriar[i];
+        progress("markets", i + 1, paisesParaCriar.length);
         try {
-          // Cria o market
+          // Cria market
           const r = await gql(destination.shop,
-            `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id name}userErrors{field message}}}`,
-            { input: { name: p.name, enabled: true, regions: [{ countryCode: p.code }] } }, tokenDest);
+            `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id}userErrors{field message}}}`,
+            { input: { name: cfg.name, enabled: true, regions: [{ countryCode: code }] } }, tokenDest);
 
-          if (r.marketCreate?.userErrors?.length === 0 && r.marketCreate?.market?.id) {
-            const marketId = r.marketCreate.market.id;
-            mkCriados++;
+          if (r.marketCreate.userErrors.length > 0) continue;
+          const marketId = r.marketCreate.market.id;
+          mkCriados++;
 
-            // Filtra locales disponíveis neste market
-            const marketLocales = (p.locales || ["en"]).filter(l => installedLocales.has(l));
-            const primaryLocale = marketLocales[0] || "en";
-            const alternateLocales = marketLocales.slice(1);
+          // Define idioma primário + inglês como secundário
+          const locales = [];
+          if (cfg.lang && cfg.lang !== "en") locales.push({ locale: cfg.lang, published: true });
+          locales.push({ locale: "en", published: true }); // inglês sempre como secundário
 
-            // Configura web presence (subpastas + idiomas)
-            if (marketLocales.length > 0) {
-              try {
-                await gql(destination.shop, `
-                  mutation webPresenceCreate($marketId: ID!, $input: MarketWebPresenceCreateInput!) {
-                    marketWebPresenceCreate(marketId: $marketId, webPresence: $input) {
-                      webPresence { id defaultLocale { locale } }
-                      userErrors { field message }
-                    }
-                  }`,
-                  {
-                    marketId,
-                    input: {
-                      defaultLocale: primaryLocale,
-                      alternateLocales: alternateLocales,
-                      subfolderSuffix: p.code.toLowerCase(),
-                    }
-                  }, tokenDest);
-              } catch {}
-            }
-
-            // Moeda: EUR para Europa, local para resto
-            const euroCountries = new Set(["DE","FR","IT","ES","PT","NL","BE","AT","IE","LU","GR","FI","CY","EE","LV","LT","SI","MT","SK"]);
-            const useCurrencyLocal = !euroCountries.has(p.code);
+          if (locales.length > 0) {
             try {
               await gql(destination.shop,
-                `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
-                { id: marketId, i: { localCurrencies: useCurrencyLocal } }, tokenDest);
+                `mutation marketLocalesAdd($marketId:ID!,$locales:[MarketLocaleInput!]!){marketLocalesAdd(marketId:$marketId,locales:$locales){marketLocales{locale}userErrors{message}}}`,
+                { marketId, locales }, tokenDest);
             } catch {}
           }
+
+          // Define moeda local
+          try {
+            await gql(destination.shop,
+              `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
+              { id: marketId, i: { localCurrencies: true } }, tokenDest);
+          } catch {}
+
         } catch {}
-        await sleep(150);
+        await sleep(120);
       }
-      log(`✅ Markets: ${mkCriados} criados | ${existingCountries.size} já existiam`, "success");
+      log(`✅ Markets: ${mkCriados} criados | idioma + moeda configurados`, "success");
     }
 
     // ==== FRETES POR PAÍS ====
@@ -1060,216 +1000,10 @@ async function runClone({ origin, destination, options, customize }, log, progre
     }
 
     send("done", { msg: "🎉 Clonagem completa!" });
-  } catch(err) {
-    send("error", { msg: "💥 Erro fatal: " + err.message });
-    throw err;
-  }
-}
-
-// Endpoint legado SSE (mantém compatibilidade)
-app.post("/api/clone", async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  if (res.flushHeaders) res.flushHeaders();
-  const send = (type, data) => { try { res.write(`data: ${JSON.stringify({type,...data})}\n\n`); } catch {} };
-  const log = (msg, status="info") => send("log", {msg, status});
-  const progress = (step, current, total) => send("progress", {step, current, total});
-  const ka = setInterval(() => { try { res.write(": ka\n\n"); } catch {} }, 10000);
-  try {
-    await runClone(req.body, log, progress, send);
-    send("done", { msg: "🎉 Clonagem completa!" });
-  } catch(err) {
-    send("error", { msg: "💥 Erro fatal: " + err.message });
-  }
-  clearInterval(ka);
-  res.end();
-});
-
-// ============================================================
-//  API: REVIEWS GENERATOR (Judge.me)
-// ============================================================
-app.post("/api/reviews", async (req, res) => {
-  const { shop, token, qty, fivePct, openaiKey, useImages } = req.body;
-
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-
-  const send = (type, data) => res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
-  const log = (msg) => send("log", { msg });
-
-  const NOMES = [
-    'James W.','Sophie M.','Lucas B.','Emma T.','Noah K.','Olivia R.',
-    'Liam S.','Ava C.','Mason D.','Isabella F.','Ethan G.','Mia H.',
-    'Alexander J.','Charlotte L.','Benjamin N.','Amelia P.','William Q.',
-    'Harper V.','Evelyn Z.','Michael R.','Sarah K.','David L.',
-    'Emma J.','Chris B.','Laura S.','Tom W.','Anna M.','Peter H.','Lisa G.',
-    'Carlos M.','Maria S.','João P.','Ana L.','Ricardo F.','Paula C.',
-    'Daniel A.','Fernanda B.','Gabriel N.','Camila O.','Felipe T.','Julia R.',
-  ];
-
-  const TEXTOS5 = [
-    "Absolutely love the fit. The design is unique and gets compliments every time I wear it. Quality exceeded my expectations.",
-    "Amazing product! Fast shipping and the quality is top notch. Will definitely order again.",
-    "Perfect fit and the material feels premium. Exactly as described. Very happy with this purchase.",
-    "Incredible quality for the price. The design is stylish and modern. Highly recommend!",
-    "Best purchase I've made this year. The product looks even better in person. 10/10!",
-    "Great quality and fast delivery. The sizing was spot on. Love it!",
-    "This exceeded all my expectations. Excellent craftsmanship and arrived quickly.",
-    "Stunning design and very comfortable. I've received so many compliments already.",
-    "Very satisfied with this purchase. The quality is premium and shipping was fast.",
-    "Exactly what I was looking for. Fits perfectly and looks amazing. Will buy again!",
-    "Outstanding quality. Well made and looks fantastic. Highly recommend.",
-    "Love this! Unique design and excellent quality. Very happy customer.",
-    "Perfect in every way. Fast shipping, great packaging, beautiful product.",
-    "Incredible value. Quality is much better than expected. 5 stars without hesitation.",
-    "Fits true to size and the material is very comfortable. Love everything about it.",
-    "Super stylish and very well made. Shipping was quick and packaging was great.",
-    "These are my new favourite. Comfort level is off the charts!",
-    "Gorgeous design and the quality feels premium. Very impressed with this purchase.",
-  ];
-
-  const TEXTOS4 = [
-    "Really nice product overall. Quality is good and shipping was reasonably fast. Happy with my purchase.",
-    "Good quality item. Looks great and fits well. Minor delay in shipping but worth the wait.",
-    "Nice product, quality is solid. Would have given 5 stars but took a bit longer to arrive.",
-    "Good purchase overall. Product is as described and quality is decent. Would buy again.",
-    "Happy with it. Good quality and nice design. Delivery was a bit slow but okay.",
-  ];
-
-  const TITULOS5 = ['Love it!','Perfect!','Amazing quality','Exceeded expectations','Highly recommend!','5 stars!','Best purchase!','Absolutely stunning','So comfortable!','Great product!'];
-  const TITULOS4 = ['Really good','Nice product','Good quality','Happy with it','Worth buying'];
-
-  function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-  function emailRand(nome) {
-    const dominios = ['gmail.com','yahoo.com','hotmail.com','outlook.com','icloud.com'];
-    return nome.toLowerCase().replace(/[^a-z]/g,'') + Math.floor(Math.random()*999) + '@' + rand(dominios);
-  }
-
-  try {
-    // 1. Busca produtos via Judge.me
-    log("🔍 Buscando produtos da loja...");
-    const prodRes = await fetch(`https://judge.me/api/v1/products?api_token=${token}&shop_domain=${shop}&per_page=100`, {
-      headers: { 'Content-Type': 'application/json' }
-    });
-    const prodData = await prodRes.json();
-    const products = prodData.products || [];
-
-    if (!products.length) {
-      send("error", { msg: "Nenhum produto encontrado. Verifique o token e o shop domain." });
-      res.end(); return;
-    }
-
-    send("products", { count: products.length });
-    log(`✅ ${products.length} produtos encontrados`);
-
-    // 2. Gera imagens via DALL-E se configurado
-    const imagens = [];
-    if (useImages && openaiKey) {
-      const QTD_IMGS = 10;
-      log(`🎨 Gerando ${QTD_IMGS} imagens via DALL-E 3...`);
-      const prods_embaralhados = [...products].sort(() => Math.random() - 0.5);
-      for (let i = 0; i < QTD_IMGS; i++) {
-        const p = prods_embaralhados[i % prods_embaralhados.length];
-        try {
-          const imgRes = await fetch('https://api.openai.com/v1/images/generations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openaiKey}` },
-            body: JSON.stringify({ model: 'dall-e-3', prompt: `Person wearing or using ${p.title}, lifestyle photo, natural daylight, clean background, high quality fashion photography`, n: 1, size: '1024x1024', quality: 'hd' })
-          });
-          const imgData = await imgRes.json();
-          const url = imgData.data?.[0]?.url;
-          if (url) {
-            imagens.push(url);
-            log(`  🖼️ Imagem ${i+1}/${QTD_IMGS} gerada`);
-          }
-        } catch { log(`  ⚠️ Falha imagem ${i+1}`); }
-        await sleep(1200);
-      }
-      log(`✅ ${imagens.length} imagens prontas`);
-    }
-
-    // 3. Distribui reviews pelos produtos
-    const reviewsPorProduto = Math.ceil(qty / products.length);
-    let criadas = 0;
-
-    for (const product of products) {
-      const qtdProd = Math.min(reviewsPorProduto, qty - criadas);
-      if (qtdProd <= 0) break;
-
-      for (let i = 0; i < qtdProd; i++) {
-        const stars = Math.random() * 100 < (fivePct || 85) ? 5 : 4;
-        const nome = rand(NOMES);
-        const texto = stars === 5 ? rand(TEXTOS5) : rand(TEXTOS4);
-        const titulo = stars === 5 ? rand(TITULOS5) : rand(TITULOS4);
-        const usarImg = imagens.length > 0 && criadas % 8 === 0;
-        const imgUrl = usarImg ? imagens[Math.floor(Math.random() * imagens.length)] : null;
-
-        const body = {
-          api_token: token,
-          shop_domain: shop,
-          platform: 'shopify',
-          id: product.external_id,
-          title: titulo,
-          body: texto,
-          rating: stars,
-          name: nome,
-          email: emailRand(nome),
-          picture_urls: imgUrl ? [imgUrl] : [],
-          verified_buyer: Math.random() > 0.3,
-          featured: Math.random() > 0.7,
-          curated: 'ok',
-          published: true,
-        };
-
-        try {
-          const r = await fetch('https://judge.me/api/v1/reviews', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-          });
-          if (r.status === 200 || r.status === 201) {
-            criadas++;
-            send("review", { stars, name: nome, img: !!imgUrl });
-          } else {
-            const err = await r.json();
-            log(`  ⚠️ Erro: ${JSON.stringify(err)}`);
-          }
-        } catch(e) { log(`  ⚠️ Exceção: ${e.message}`); }
-
-        await sleep(300);
-      }
-      if (criadas >= qty) break;
-    }
-
-    send("done", { total: criadas });
-  } catch(err) {
-    send("error", { msg: err.message });
-  }
-  res.end();
-});
-
-
-// ============================================================
-//  API: JUDGE.ME PROXY (usa fetch nativo do Node)
-// ============================================================
-app.post("/api/jm-proxy", async (req, res) => {
-  const { method, path, body } = req.body;
-  try {
-    const opts = {
-      method: method || "GET",
-      headers: { "Content-Type": "application/json" },
-    };
-    if (body && method === "POST") opts.body = JSON.stringify(body);
-    // usa fetch NATIVO do Node (globalThis.fetch), não node-fetch
-    const r = await globalThis.fetch(`https://judge.me${path}`, opts);
-    const data = await r.json().catch(() => ({}));
-    res.status(r.status).json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    send("error", { msg: `💥 Erro fatal: ${err.message}` });
   }
+  res.end();
 });
 
 const PORT = process.env.PORT || 3000;
