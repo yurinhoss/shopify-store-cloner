@@ -699,6 +699,8 @@ app.post("/api/clone", async (req, res) => {
                     edges {
                       node {
                         zone {
+                          id
+                          name
                           countries { code { countryCode } }
                         }
                       }
@@ -714,12 +716,36 @@ app.post("/api/clone", async (req, res) => {
       if (!profile) { log("❌ Default delivery profile não encontrado", "error"); }
       else {
         const lg = profile.profileLocationGroups[0];
-        const paisesComFrete = new Set();
-        for (const ze of lg.locationGroupZones.edges)
-          for (const c of ze.node.zone.countries) if (c.code.countryCode) paisesComFrete.add(c.code.countryCode);
 
-        const fretesPaises = Object.keys(FRETES).filter(c => !paisesComFrete.has(c));
-        log(`🚚 ${paisesComFrete.size} países já têm frete | ${fretesPaises.length} a criar`);
+        // 🗑️ PASSO 1: Identifica as zonas antigas que cobrem países da nossa lista
+        // (só mexe em zonas de países que estão no FRETES — zonas domésticas
+        //  ou "Rest of World" que não batem com a lista ficam intactas)
+        const zonasParaExcluir = [];
+        for (const ze of lg.locationGroupZones.edges) {
+          const zona = ze.node.zone;
+          const paisesDaZona = zona.countries.map(c => c.code.countryCode).filter(Boolean);
+          if (paisesDaZona.length > 0 && paisesDaZona.some(c => FRETES[c])) {
+            zonasParaExcluir.push({ id: zona.id, name: zona.name });
+          }
+        }
+
+        // 🗑️ PASSO 2: Exclui as zonas antigas de uma vez só
+        if (zonasParaExcluir.length > 0) {
+          log(`🗑️ Excluindo ${zonasParaExcluir.length} zonas de frete antigas para recriar...`);
+          try {
+            await gql(destination.shop, `mutation deliveryProfileUpdate($id:ID!,$profile:DeliveryProfileInput!){deliveryProfileUpdate(id:$id,profile:$profile){profile{id}userErrors{field message}}}`, {
+              id: profile.id,
+              profile: { locationGroupsToUpdate: [{ id: lg.locationGroup.id, zonesToDelete: zonasParaExcluir.map(z => z.id) }] }
+            }, tokenDest);
+            log(`🗑️ ${zonasParaExcluir.length} zonas antigas excluídas`);
+          } catch (err) {
+            log(`⚠️ Erro ao excluir zonas antigas: ${err.message.slice(0, 100)}`, "error");
+          }
+        }
+
+        // ✨ PASSO 3: Recria TODAS as zonas com os valores novos
+        const fretesPaises = Object.keys(FRETES);
+        log(`🚚 Criando fretes para ${fretesPaises.length} países com os valores novos`);
 
         let shCriados = 0;
         for (let i = 0; i < fretesPaises.length; i++) {
@@ -742,7 +768,7 @@ app.post("/api/clone", async (req, res) => {
           } catch {}
           await sleep(100);
         }
-        log(`✅ Fretes: ${shCriados} países criados | Padrão EUR ${valorPadraoEUR.toFixed(2)} | Expresso EUR ${valorExpressoEUR.toFixed(2)}`, "success");
+        log(`✅ Fretes: ${zonasParaExcluir.length} zonas recriadas | ${shCriados} países | Padrão EUR ${valorPadraoEUR.toFixed(2)} | Expresso EUR ${valorExpressoEUR.toFixed(2)}`, "success");
       }
     }
 
