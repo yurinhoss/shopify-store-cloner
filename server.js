@@ -527,180 +527,79 @@ app.post("/api/clone", async (req, res) => {
       }
     }
 
-    // ==== MARKETS GLOBAIS + IDIOMAS + SUBFOLDERS ====
+    // ==== MARKETS GLOBAIS ====
     if (options.markets) {
-      log("━━━━━━━━━━ ETAPA 9: MARKETS + IDIOMAS + SUBFOLDERS ━━━━━━━━━━");
+      log("━━━━━━━━━━ ETAPA 9: MARKETS GLOBAIS ━━━━━━━━━━");
 
-      // Mapa país → idioma primário + alternates + moeda
-      // Idiomas múltiplos para países poliglotas (Suíça, Bélgica, Canadá, etc.)
-      const MARKET_MAP = {
-        // Europa UE — EUR
-        "DE": { name:"Germany",         primary:"de",    alternates:["en"],            currency:"EUR" },
-        "AT": { name:"Austria",          primary:"de",    alternates:["en"],            currency:"EUR" },
-        "FR": { name:"France",           primary:"fr",    alternates:["en"],            currency:"EUR" },
-        "BE": { name:"Belgium",          primary:"fr",    alternates:["nl","en"],       currency:"EUR" },
-        "LU": { name:"Luxembourg",       primary:"fr",    alternates:["de","en"],       currency:"EUR" },
-        "IT": { name:"Italy",            primary:"it",    alternates:["en"],            currency:"EUR" },
-        "ES": { name:"Spain",            primary:"es",    alternates:["en"],            currency:"EUR" },
-        "PT": { name:"Portugal",         primary:"pt-PT", alternates:["en"],            currency:"EUR" },
-        "NL": { name:"Netherlands",      primary:"nl",    alternates:["en"],            currency:"EUR" },
-        "GR": { name:"Greece",           primary:"el",    alternates:["en"],            currency:"EUR" },
-        "FI": { name:"Finland",          primary:"en",    alternates:[],                currency:"EUR" },
-        "IE": { name:"Ireland",          primary:"en",    alternates:[],                currency:"EUR" },
-        "SK": { name:"Slovakia",         primary:"sk",    alternates:["en"],            currency:"EUR" },
-        "HR": { name:"Croatia",          primary:"hr",    alternates:["en"],            currency:"EUR" },
-        "CY": { name:"Cyprus",           primary:"el",    alternates:["tr","en"],       currency:"EUR" },
-        "EE": { name:"Estonia",          primary:"en",    alternates:[],                currency:"EUR" },
-        "LV": { name:"Latvia",           primary:"en",    alternates:[],                currency:"EUR" },
-        "LT": { name:"Lithuania",        primary:"en",    alternates:[],                currency:"EUR" },
-        "SI": { name:"Slovenia",         primary:"en",    alternates:[],                currency:"EUR" },
-        "MT": { name:"Malta",            primary:"en",    alternates:[],                currency:"EUR" },
-        // Europa moeda própria
-        "GB": { name:"United Kingdom",   primary:"en",    alternates:[],                currency:"GBP" },
-        "CH": { name:"Switzerland",      primary:"de",    alternates:["fr","it","en"],  currency:"CHF" },
-        "SE": { name:"Sweden",           primary:"sv",    alternates:["en"],            currency:"SEK" },
-        "NO": { name:"Norway",           primary:"no",    alternates:["en"],            currency:"NOK" },
-        "DK": { name:"Denmark",          primary:"da",    alternates:["en"],            currency:"DKK" },
-        "PL": { name:"Poland",           primary:"pl",    alternates:["en"],            currency:"PLN" },
-        "CZ": { name:"Czech Republic",   primary:"cs",    alternates:["en"],            currency:"CZK" },
-        "HU": { name:"Hungary",          primary:"hu",    alternates:["en"],            currency:"HUF" },
-        "RO": { name:"Romania",          primary:"ro",    alternates:["en"],            currency:"RON" },
-        "BG": { name:"Bulgaria",         primary:"bg",    alternates:["en"],            currency:"BGN" },
-        "TR": { name:"Turkey",           primary:"tr",    alternates:["en"],            currency:"TRY" },
-        // Europa extra
-        "AL": { name:"Albania",          primary:"en",    alternates:[],                currency:"ALL" },
-        "BA": { name:"Bosnia",           primary:"en",    alternates:[],                currency:"BAM" },
-        "RS": { name:"Serbia",           primary:"en",    alternates:[],                currency:"RSD" },
-        "MK": { name:"North Macedonia",  primary:"en",    alternates:[],                currency:"MKD" },
-        "IS": { name:"Iceland",          primary:"en",    alternates:[],                currency:"ISK" },
-        "ME": { name:"Montenegro",       primary:"en",    alternates:[],                currency:"EUR" },
-        "XK": { name:"Kosovo",           primary:"en",    alternates:[],                currency:"EUR" },
-        "MD": { name:"Moldova",          primary:"ro",    alternates:["en"],            currency:"MDL" },
-        // Américas
-        "US": { name:"United States",    primary:"en",    alternates:[],                currency:"USD" },
-        "CA": { name:"Canada",           primary:"en",    alternates:["fr"],            currency:"CAD" },
-        "MX": { name:"Mexico",           primary:"es",    alternates:["en"],            currency:"MXN" },
-        "BR": { name:"Brazil",           primary:"en",    alternates:[],                currency:"BRL" },
-        "AR": { name:"Argentina",        primary:"es",    alternates:["en"],            currency:"ARS" },
-        "CL": { name:"Chile",            primary:"es",    alternates:["en"],            currency:"CLP" },
-        "CO": { name:"Colombia",         primary:"es",    alternates:["en"],            currency:"COP" },
-        "PE": { name:"Peru",             primary:"es",    alternates:["en"],            currency:"PEN" },
-        "UY": { name:"Uruguay",          primary:"es",    alternates:["en"],            currency:"UYU" },
-        "EC": { name:"Ecuador",          primary:"es",    alternates:["en"],            currency:"USD" },
-        "GT": { name:"Guatemala",        primary:"es",    alternates:["en"],            currency:"GTQ" },
-        "DO": { name:"Dominican Rep.",   primary:"es",    alternates:["en"],            currency:"DOP" },
-        "BO": { name:"Bolivia",          primary:"es",    alternates:["en"],            currency:"BOB" },
-        "PY": { name:"Paraguay",         primary:"es",    alternates:["en"],            currency:"PYG" },
-        "VE": { name:"Venezuela",        primary:"es",    alternates:["en"],            currency:"USD" },
-        "CR": { name:"Costa Rica",       primary:"es",    alternates:["en"],            currency:"CRC" },
-        "PA": { name:"Panama",           primary:"es",    alternates:["en"],            currency:"USD" },
-        // Ásia / Pacífico
-        "JP": { name:"Japan",            primary:"ja",    alternates:["en"],            currency:"JPY" },
-        "KR": { name:"South Korea",      primary:"en",    alternates:[],                currency:"KRW" },
-        "SG": { name:"Singapore",        primary:"en",    alternates:[],                currency:"SGD" },
-        "HK": { name:"Hong Kong",        primary:"en",    alternates:[],                currency:"HKD" },
-        "TW": { name:"Taiwan",           primary:"en",    alternates:[],                currency:"TWD" },
-        "AU": { name:"Australia",        primary:"en",    alternates:[],                currency:"AUD" },
-        "NZ": { name:"New Zealand",      primary:"en",    alternates:[],                currency:"NZD" },
-        "CN": { name:"China",            primary:"en",    alternates:[],                currency:"CNY" },
-        "IN": { name:"India",            primary:"en",    alternates:[],                currency:"INR" },
-        "TH": { name:"Thailand",         primary:"en",    alternates:[],                currency:"THB" },
-        "PH": { name:"Philippines",      primary:"en",    alternates:[],                currency:"PHP" },
-        "MY": { name:"Malaysia",         primary:"en",    alternates:[],                currency:"MYR" },
-        "ID": { name:"Indonesia",        primary:"en",    alternates:[],                currency:"IDR" },
-        "VN": { name:"Vietnam",          primary:"en",    alternates:[],                currency:"VND" },
-        "PK": { name:"Pakistan",         primary:"en",    alternates:[],                currency:"PKR" },
-        "BD": { name:"Bangladesh",       primary:"en",    alternates:[],                currency:"BDT" },
-        // Médio Oriente / África
-        "AE": { name:"UAE",              primary:"en",    alternates:[],                currency:"AED" },
-        "SA": { name:"Saudi Arabia",     primary:"en",    alternates:[],                currency:"SAR" },
-        "IL": { name:"Israel",           primary:"en",    alternates:[],                currency:"ILS" },
-        "ZA": { name:"South Africa",     primary:"en",    alternates:[],                currency:"ZAR" },
-        "MA": { name:"Morocco",          primary:"fr",    alternates:["en"],            currency:"MAD" },
-        "EG": { name:"Egypt",            primary:"en",    alternates:[],                currency:"EGP" },
-        "QA": { name:"Qatar",            primary:"en",    alternates:[],                currency:"QAR" },
-        "KW": { name:"Kuwait",           primary:"en",    alternates:[],                currency:"KWD" },
-        "NG": { name:"Nigeria",          primary:"en",    alternates:[],                currency:"NGN" },
-        "KE": { name:"Kenya",            primary:"en",    alternates:[],                currency:"KES" },
-        "GH": { name:"Ghana",            primary:"en",    alternates:[],                currency:"GHS" },
-        "TZ": { name:"Tanzania",         primary:"en",    alternates:[],                currency:"TZS" },
-      };
+      const PAISES_MARKETS = [
+        {code:"DE",name:"Germany"},{code:"FR",name:"France"},{code:"IT",name:"Italy"},{code:"ES",name:"Spain"},
+        {code:"PT",name:"Portugal"},{code:"NL",name:"Netherlands"},{code:"BE",name:"Belgium"},{code:"AT",name:"Austria"},
+        {code:"IE",name:"Ireland"},{code:"LU",name:"Luxembourg"},{code:"GR",name:"Greece"},{code:"FI",name:"Finland"},
+        {code:"GB",name:"United Kingdom"},{code:"CH",name:"Switzerland"},{code:"SE",name:"Sweden"},{code:"NO",name:"Norway"},
+        {code:"DK",name:"Denmark"},{code:"PL",name:"Poland"},{code:"CZ",name:"Czech Republic"},{code:"HU",name:"Hungary"},
+        {code:"RO",name:"Romania"},{code:"BG",name:"Bulgaria"},{code:"HR",name:"Croatia"},{code:"SK",name:"Slovakia"},
+        {code:"CY",name:"Cyprus"},{code:"EE",name:"Estonia"},{code:"LV",name:"Latvia"},{code:"LT",name:"Lithuania"},
+        {code:"SI",name:"Slovenia"},{code:"MT",name:"Malta"},
+        {code:"US",name:"United States"},{code:"CA",name:"Canada"},{code:"MX",name:"Mexico"},
+        {code:"BR",name:"Brazil"},{code:"AR",name:"Argentina"},{code:"CL",name:"Chile"},{code:"CO",name:"Colombia"},
+        {code:"PE",name:"Peru"},{code:"UY",name:"Uruguay"},{code:"EC",name:"Ecuador"},
+        {code:"JP",name:"Japan"},{code:"KR",name:"South Korea"},{code:"SG",name:"Singapore"},
+        {code:"HK",name:"Hong Kong"},{code:"TW",name:"Taiwan"},{code:"AU",name:"Australia"},{code:"NZ",name:"New Zealand"},
+        {code:"CN",name:"China"},{code:"IN",name:"India"},{code:"TH",name:"Thailand"},
+        {code:"AE",name:"UAE"},{code:"IL",name:"Israel"},{code:"SA",name:"Saudi Arabia"},
+        {code:"ZA",name:"South Africa"},{code:"MA",name:"Morocco"},{code:"TR",name:"Turkey"},
+      ];
 
-      // Gera subfolder único por país: idioma+país (sem hífen)
-      // Casos especiais: pt-PT vira "pt", evitando "ptpt"
-      const subfolderPorPais = (code, primary) => {
-        let lang = primary.toLowerCase();
-        if (lang.includes("-")) lang = lang.split("-")[0]; // pt-PT → pt
-        return `${lang}${code.toLowerCase()}`;
-      };
-
-      // Lista idiomas instalados na loja destino
-      const instaladosResp = await gql(destination.shop,
-        `query { shopLocales { locale primary published } }`, {}, tokenDest);
-      const locaisInstalados = new Set(instaladosResp.shopLocales.map(l => l.locale));
-      log(`📚 ${locaisInstalados.size} idiomas instalados na loja: ${[...locaisInstalados].join(", ")}`);
-
-      // Lista países já em markets
+      // Lista países já em markets INDIVIDUAIS (ignora Global/International)
       const existingCountries = new Set();
       try {
         const mData = await gql(destination.shop, `
-          query { markets(first: 100) { edges { node { name regions(first: 100) { edges { node { ... on MarketRegionCountry { code } } } } } } } }
+          query {
+            markets(first: 100) {
+              edges {
+                node {
+                  name
+                  regions(first: 100) {
+                    edges { node { ... on MarketRegionCountry { code } } }
+                  }
+                }
+              }
+            }
+          }
         `, {}, tokenDest);
         for (const e of mData.markets.edges) {
           const regionCount = e.node.regions.edges.length;
-          if (regionCount > 10) { log(`⏭️ Ignorando market "${e.node.name}" (${regionCount} países — catch-all)`); continue; }
+          // Pula markets com muitos países (Global/International = catch-all)
+          if (regionCount > 10) {
+            log(`⏭️ Ignorando market "${e.node.name}" (${regionCount} países — catch-all)`);
+            continue;
+          }
           for (const r of e.node.regions.edges) if (r.node.code) existingCountries.add(r.node.code);
         }
       } catch {}
 
-      const paisesParaCriar = Object.entries(MARKET_MAP).filter(([code]) => !existingCountries.has(code));
-      log(`🌍 ${existingCountries.size} países já cobertos | ${paisesParaCriar.length} a criar`);
+      const novos = PAISES_MARKETS.filter(p => !existingCountries.has(p.code));
+      log(`🌍 ${existingCountries.size} países já cobertos | ${novos.length} a criar`);
 
-      let mkCriados = 0, mkComIdioma = 0;
-      for (let i = 0; i < paisesParaCriar.length; i++) {
-        const [code, cfg] = paisesParaCriar[i];
-        progress("markets", i + 1, paisesParaCriar.length);
+      let mkCriados = 0;
+      for (let i = 0; i < novos.length; i++) {
+        const p = novos[i];
+        progress("markets", i + 1, novos.length);
         try {
-          // 1. Cria market
-          const r = await gql(destination.shop,
-            `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id}userErrors{field message}}}`,
-            { input: { name: cfg.name, enabled: true, regions: [{ countryCode: code }] } }, tokenDest);
-
-          if (r.marketCreate.userErrors.length > 0) continue;
-          const marketId = r.marketCreate.market.id;
-          mkCriados++;
-
-          // 2. Ativa moeda local
-          try {
-            await gql(destination.shop,
-              `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
-              { id: marketId, i: { localCurrencies: true } }, tokenDest);
-          } catch {}
-
-          // 3. Filtra alternates pelos idiomas instalados
-          const altsValidos = cfg.alternates.filter(l => locaisInstalados.has(l));
-
-          // 4. Cria webPresence com idioma primário + alternates + subfolder único
-          if (locaisInstalados.has(cfg.primary)) {
-            const subfolder = subfolderPorPais(code, cfg.primary);
+          const r = await gql(destination.shop, `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id}userErrors{field message}}}`,
+            { input: { name: p.name, enabled: true, regions: [{ countryCode: p.code }] } }, tokenDest);
+          if (r.marketCreate.userErrors.length === 0) {
+            mkCriados++;
+            // Tenta ativar moeda local
             try {
-              const wpRes = await gql(destination.shop,
-                `mutation($mid:ID!,$wp:MarketWebPresenceCreateInput!){
-                  marketWebPresenceCreate(marketId:$mid,webPresence:$wp){
-                    market{id name}
-                    userErrors{field message}
-                  }
-                }`,
-                { mid: marketId, wp: { defaultLocale: cfg.primary, alternateLocales: altsValidos, subfolderSuffix: subfolder } },
-                tokenDest);
-              if (wpRes.marketWebPresenceCreate.userErrors.length === 0) mkComIdioma++;
+              await gql(destination.shop, `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
+                { id: r.marketCreate.market.id, i: { localCurrencies: true } }, tokenDest);
             } catch {}
           }
-
         } catch {}
-        await sleep(150);
+        await sleep(100);
       }
-      log(`✅ Markets: ${mkCriados} criados | ${mkComIdioma} com idioma + subfolder configurados`, "success");
+      log(`✅ Markets: ${mkCriados} criados | ${existingCountries.size} já existiam`, "success");
     }
 
     // ==== FRETES POR PAÍS ====
@@ -772,10 +671,19 @@ app.post("/api/clone", async (req, res) => {
       const shopData = await gql(destination.shop, `query{shop{currencyCode}}`, {}, tokenDest);
       const moedaLoja = shopData.shop.currencyCode;
       const taxa = TAXA_CAMBIO[moedaLoja] || 1;
-      const precoStd = (4.90 * taxa).toFixed(2);
-      const precoPri = (9.70 * taxa).toFixed(2);
 
-      log(`💰 Moeda da loja: ${moedaLoja} | Standard: ${moedaLoja} ${precoStd} | Priority: ${moedaLoja} ${precoPri}`);
+      // 📦 FRETES CUSTOMIZÁVEIS
+      // Lê os valores enviados pelo formulário (shippingCosts).
+      // Se não vier nada, usa os valores antigos como padrão (4.90 e 9.70).
+      const freteCustom = req.body.shippingCosts || {};
+      const valorPadraoEUR = parseFloat(freteCustom.standard) > 0 ? parseFloat(freteCustom.standard) : 4.90;
+      const valorExpressoEUR = parseFloat(freteCustom.express) > 0 ? parseFloat(freteCustom.express) : 9.70;
+
+      // Converte para a moeda da loja de destino
+      const precoStd = (valorPadraoEUR * taxa).toFixed(2);
+      const precoPri = (valorExpressoEUR * taxa).toFixed(2);
+
+      log(`💰 Moeda da loja: ${moedaLoja} | Padrão: EUR ${valorPadraoEUR.toFixed(2)} → ${moedaLoja} ${precoStd} | Expresso: EUR ${valorExpressoEUR.toFixed(2)} → ${moedaLoja} ${precoPri}`);
 
       // Pega delivery profile
       const profData = await gql(destination.shop, `
@@ -834,7 +742,7 @@ app.post("/api/clone", async (req, res) => {
           } catch {}
           await sleep(100);
         }
-        log(`✅ Fretes: ${shCriados} países criados | Standard €4.90 | Priority €9.70`, "success");
+        log(`✅ Fretes: ${shCriados} países criados | Padrão EUR ${valorPadraoEUR.toFixed(2)} | Expresso EUR ${valorExpressoEUR.toFixed(2)}`, "success");
       }
     }
 
@@ -1024,217 +932,165 @@ app.post("/api/clone", async (req, res) => {
 });
 
 // ============================================================
-//  API: REVIEWS GENERATOR (SSE)
-//  Gera 100 reviews realistas com quebra de objeção
-//  Importa via Judge.me API
+//  API: REVIEWS GENERATOR (Judge.me)
 // ============================================================
-
-const REVIEW_TIPOS = [
-  { tipo: "entrega_rapida",      rating: 5, peso: 14 },
-  { tipo: "entrega_normal",      rating: 5, peso: 12 },
-  { tipo: "entrega_demorada_ok", rating: 4, peso: 8  },
-  { tipo: "qualidade",           rating: 5, peso: 14 },
-  { tipo: "pagamento_seguro",    rating: 5, peso: 10 },
-  { tipo: "rastreio",            rating: 5, peso: 10 },
-  { tipo: "problema_resolvido",  rating: 4, peso: 8  },
-  { tipo: "recompra",            rating: 5, peso: 8  },
-  { tipo: "presente",            rating: 5, peso: 8  },
-  { tipo: "preco_valor",         rating: 5, peso: 8  },
-];
-
-const REVIEW_NOMES = ["Luca M.","Sofia B.","Marco T.","Emma S.","Thomas K.","Laura F.","David R.","Anna W.","Pierre L.","Elena G.","James H.","Maria C.","Oliver P.","Charlotte D.","Felix N.","Isabella R.","Lucas V.","Hannah M.","Matteo A.","Zoe B.","Andreas K.","Giulia F.","Noah S.","Amelie D.","Finn H.","Sara T.","Max L.","Chloe P.","Rafael A.","Mia W.","Jan K.","Nina P.","Tom B.","Lea S.","Paul R.","Eva M.","Leon H.","Julia W.","Erik N.","Clara D."];
-const REVIEW_PAISES = ["Germany","France","Italy","Spain","Netherlands","Belgium","Portugal","Austria","Sweden","Poland","Denmark","Greece","Finland","Czech Republic","Romania","Ireland","Croatia","Hungary"];
-
-const REVIEW_TITULOS = {
-  entrega_rapida:["Super fast delivery!","Arrived quicker than expected!","Lightning fast shipping!","Delivered in record time!","Amazingly fast!","Faster than Amazon!"],
-  entrega_normal:["Great tracking experience","Arrived as expected","Tracking was perfect","Smooth delivery","No issues at all","Exactly on time"],
-  entrega_demorada_ok:["Worth the wait!","A bit slow but worth it","Patient but very satisfied","Delayed but great product","Good things take time"],
-  qualidade:["Incredible quality!","Exceeded my expectations","Better than retail!","Absolutely love it!","Outstanding quality","Premium feel"],
-  pagamento_seguro:["100% safe to order","Totally trustworthy shop","Secure payment, no worries","Had doubts, but perfect","Safe and reliable"],
-  rastreio:["Love the tracking updates!","Real-time tracking is great","Always knew where it was","Tracking was flawless","Perfect transparency"],
-  problema_resolvido:["Great customer service!","Issue solved super fast","They really care","Small problem, great fix","Support is amazing"],
-  recompra:["My 3rd order already!","Coming back again!","Loyal customer for a reason","Always my first choice","Never disappoints"],
-  presente:["Perfect gift!","They absolutely loved it","Best gift idea!","Made someone very happy","Great for gifting"],
-  preco_valor:["Best price online!","Saved so much money!","Way cheaper than retail","Incredible value","Unbeatable price"],
-};
-
-function reviewFallback(tipo, produto, pais) {
-  const F = {
-    entrega_rapida:[
-      `Ordered on Monday and it arrived Thursday — only 3 business days to ${pais}! The ${produto} is exactly as described, great quality. Packaging was secure and professional. Couldn't be happier!`,
-      `Honestly shocked by how fast it arrived. Ordered and 4 days later it was at my door in ${pais}. The ${produto} looks even better in person. Will definitely order again!`,
-      `5-day delivery to ${pais} which is fantastic. Tracking was spot on. ${produto} is top quality, exactly what I wanted. Already recommended this shop to my friends.`,
-    ],
-    entrega_normal:[
-      `Got the tracking code right after ordering which was reassuring. Could follow every step. Arrived in about a week to ${pais}. The ${produto} is great quality for the price!`,
-      `The tracking updates kept me informed the whole time. Arrived exactly when predicted. ${produto} was well packaged and is excellent quality. Trustworthy store!`,
-      `Received my tracking number within 24 hours. Delivery to ${pais} took 7 days, perfectly reasonable. Very happy with the ${produto}, would buy again.`,
-    ],
-    entrega_demorada_ok:[
-      `Took about 9 days to arrive in ${pais}, a bit longer than expected, but the ${produto} is incredible quality. Totally worth the wait. Tracking worked great throughout.`,
-      `Delivery was around 10 days, not super fast but acceptable for international shipping. The ${produto} is fantastic — perfect quality and exactly as pictured. Happy overall!`,
-      `Had to wait about 8 days but I wasn't stressed because the tracking kept me updated. ${produto} arrived in perfect condition. Great value. 4 stars just for the slight wait.`,
-    ],
-    qualidade:[
-      `Walked past the same ${produto} in a store here in ${pais} for nearly double the price. The quality here is identical if not better. Incredible value. Got compliments already!`,
-      `The material and build quality of the ${produto} is outstanding. Much better than expected for this price. This is now my go-to shop. Absolute bargain!`,
-      `Genuinely impressed by the quality of the ${produto}. Looks and feels premium. I was hesitant but so glad I ordered. Fast becoming my favourite store in ${pais}.`,
-    ],
-    pagamento_seguro:[
-      `I was nervous about ordering from a new shop but the payment was completely secure. Got confirmation immediately. The ${produto} arrived perfectly. 100% trustworthy!`,
-      `Usually cautious about online payments, but I was pleasantly surprised. Everything was smooth and secure. ${produto} arrived quickly and is great quality. Will shop again!`,
-      `Had my reservations but decided to try. Payment was secure, got a confirmation email straight away, and the ${produto} arrived in perfect condition. Totally legit!`,
-    ],
-    rastreio:[
-      `The real-time tracking was the best part. I always knew exactly where my ${produto} was. Arrived right on schedule in ${pais}. Product is fantastic too!`,
-      `Loved getting tracking updates at every stage. No anxiety waiting for the ${produto}. Arrived in perfect condition. Great service all around!`,
-      `The tracking code worked perfectly from dispatch to my door in ${pais}. Made it stress-free. The ${produto} is amazing quality. Highly recommend!`,
-    ],
-    problema_resolvido:[
-      `Received the ${produto} with a tiny packaging defect. Contacted support and they responded within hours. Replacement sent immediately, arrived in 2 days. Exceptional service!`,
-      `Had a small sizing issue with my ${produto}. Reached out and they fixed it within 48 hours. The replacement is perfect. This service makes me a loyal customer!`,
-      `Wrong item sent initially but support sorted it out so quickly I was impressed. Got the correct ${produto} in no time. They really care. 5 stars for the resolution!`,
-    ],
-    recompra:[
-      `This is my third order and they never disappoint. The ${produto} is as good as everything else I've bought. Fast shipping to ${pais} every time. Loyal for life!`,
-      `Already on my second order and planning a third. The ${produto} quality is consistently excellent. My go-to shop now. Highly recommend!`,
-      `Came back because my first order was so good. The ${produto} didn't disappoint. Fast shipping to ${pais}, perfect product. Earned my trust completely.`,
-    ],
-    presente:[
-      `Bought the ${produto} as a birthday gift and the recipient was thrilled. Beautiful packaging, arrived on time in ${pais}, great quality. Will order gifts here again!`,
-      `Got this as a Christmas gift and it was a huge hit. The ${produto} arrived in perfect condition with lovely packaging. Fast delivery, great price. Perfect gift!`,
-      `Ordered the ${produto} as an anniversary gift. Arrived quickly, beautifully packaged, and my partner loved it. Great value and quality. The perfect present!`,
-    ],
-    preco_valor:[
-      `Saw the exact same ${produto} in a shop in ${pais} for almost twice the price. Found this store online and ordered immediately. Same quality, half the price. Never buying retail again!`,
-      `The price-to-quality ratio for the ${produto} is unbelievable. I've spent more at high street stores for much worse. My secret shopping spot now!`,
-      `Compared prices everywhere and this store had the best deal by far. The ${produto} is premium quality and arrived fast. Saved a lot and got a better product. 10/10!`,
-    ],
-  };
-  const lista = F[tipo] || [`Great ${produto}! Very happy. Fast delivery to ${pais}. Excellent quality!`];
-  return lista[Math.floor(Math.random() * lista.length)];
-}
-
-async function gerarReviewClaude(prompt, claudeKey) {
-  if (!claudeKey) return null;
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": claudeKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 300, messages: [{ role: "user", content: prompt }] }),
-    });
-    const data = await res.json();
-    return data.content?.[0]?.text?.trim() || null;
-  } catch { return null; }
-}
-
-function reviewPrompt(tipo, produto, pais) {
-  const base = `Write a realistic, natural-sounding product review in English for "${produto}" from a customer in ${pais}. Casual real-person tone, 60-100 words, vary the wording. `;
-  const extras = {
-    entrega_rapida: "Mention fast delivery (3-5 days), excitement when it arrived, great quality.",
-    entrega_normal: "Mention delivery in about a week, tracking code worked great, product exceeded expectations.",
-    entrega_demorada_ok: "Mention delivery took 8-10 days (longer but worth it), tracking helped, great product. This is a 4-star review.",
-    qualidade: "Mention incredible quality for the price, compares to expensive retail, many compliments.",
-    pagamento_seguro: "Mention being skeptical at first, payment was secure, confirmation immediate, now recommends to friends.",
-    rastreio: "Mention loving the tracking code, real-time updates at every stage, stress-free.",
-    problema_resolvido: "Mention a small issue (wrong size/minor defect) resolved by support within 2 days. This is a 4-star review that became positive.",
-    recompra: "Mention this is their 2nd or 3rd order, loyal customer, quality and price keep them coming back.",
-    presente: "Mention buying as a gift, recipient loved it, beautiful packaging, great value.",
-    preco_valor: "Mention seeing it cheaper here than physical stores, same quality, saved money.",
-  };
-  return base + (extras[tipo] || "");
-}
-
 app.post("/api/reviews", async (req, res) => {
-  const { shop, clientId, clientSecret, judgemeToken, claudeKey, perProduct, productLimit } = req.body;
+  const { shop, token, qty, fivePct, openaiKey, useImages } = req.body;
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
+
   const send = (type, data) => res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+  const log = (msg) => send("log", { msg });
+
+  const NOMES = [
+    'James W.','Sophie M.','Lucas B.','Emma T.','Noah K.','Olivia R.',
+    'Liam S.','Ava C.','Mason D.','Isabella F.','Ethan G.','Mia H.',
+    'Alexander J.','Charlotte L.','Benjamin N.','Amelia P.','William Q.',
+    'Harper V.','Evelyn Z.','Michael R.','Sarah K.','David L.',
+    'Emma J.','Chris B.','Laura S.','Tom W.','Anna M.','Peter H.','Lisa G.',
+    'Carlos M.','Maria S.','João P.','Ana L.','Ricardo F.','Paula C.',
+    'Daniel A.','Fernanda B.','Gabriel N.','Camila O.','Felipe T.','Julia R.',
+  ];
+
+  const TEXTOS5 = [
+    "Absolutely love the fit. The design is unique and gets compliments every time I wear it. Quality exceeded my expectations.",
+    "Amazing product! Fast shipping and the quality is top notch. Will definitely order again.",
+    "Perfect fit and the material feels premium. Exactly as described. Very happy with this purchase.",
+    "Incredible quality for the price. The design is stylish and modern. Highly recommend!",
+    "Best purchase I've made this year. The product looks even better in person. 10/10!",
+    "Great quality and fast delivery. The sizing was spot on. Love it!",
+    "This exceeded all my expectations. Excellent craftsmanship and arrived quickly.",
+    "Stunning design and very comfortable. I've received so many compliments already.",
+    "Very satisfied with this purchase. The quality is premium and shipping was fast.",
+    "Exactly what I was looking for. Fits perfectly and looks amazing. Will buy again!",
+    "Outstanding quality. Well made and looks fantastic. Highly recommend.",
+    "Love this! Unique design and excellent quality. Very happy customer.",
+    "Perfect in every way. Fast shipping, great packaging, beautiful product.",
+    "Incredible value. Quality is much better than expected. 5 stars without hesitation.",
+    "Fits true to size and the material is very comfortable. Love everything about it.",
+    "Super stylish and very well made. Shipping was quick and packaging was great.",
+    "These are my new favourite. Comfort level is off the charts!",
+    "Gorgeous design and the quality feels premium. Very impressed with this purchase.",
+  ];
+
+  const TEXTOS4 = [
+    "Really nice product overall. Quality is good and shipping was reasonably fast. Happy with my purchase.",
+    "Good quality item. Looks great and fits well. Minor delay in shipping but worth the wait.",
+    "Nice product, quality is solid. Would have given 5 stars but took a bit longer to arrive.",
+    "Good purchase overall. Product is as described and quality is decent. Would buy again.",
+    "Happy with it. Good quality and nice design. Delivery was a bit slow but okay.",
+  ];
+
+  const TITULOS5 = ['Love it!','Perfect!','Amazing quality','Exceeded expectations','Highly recommend!','5 stars!','Best purchase!','Absolutely stunning','So comfortable!','Great product!'];
+  const TITULOS4 = ['Really good','Nice product','Good quality','Happy with it','Worth buying'];
+
+  function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function emailRand(nome) {
+    const dominios = ['gmail.com','yahoo.com','hotmail.com','outlook.com','icloud.com'];
+    return nome.toLowerCase().replace(/[^a-z]/g,'') + Math.floor(Math.random()*999) + '@' + rand(dominios);
+  }
 
   try {
-    const token = await getToken(shop, clientId, clientSecret);
-    send("log", { msg: "✅ Autenticado na loja" });
+    // 1. Busca produtos via Judge.me
+    log("🔍 Buscando produtos da loja...");
+    const prodRes = await fetch(`https://judge.me/api/v1/products?api_token=${token}&shop_domain=${shop}&per_page=100`, {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const prodData = await prodRes.json();
+    const products = prodData.products || [];
 
-    // Lista produtos
-    const produtos = [];
-    let url = `https://${shop}/admin/api/2024-10/products.json?limit=250&fields=id,title,handle`;
-    while (url) {
-      const r = await fetch(url, { headers: { "X-Shopify-Access-Token": token } });
-      if (!r.ok) break;
-      const data = await r.json();
-      (data.products || []).forEach(p => produtos.push(p));
-      const link = r.headers.get("link") || "";
-      const next = link.match(/<([^>]+)>;\s*rel="next"/);
-      url = next ? next[1] : null;
+    if (!products.length) {
+      send("error", { msg: "Nenhum produto encontrado. Verifique o token e o shop domain." });
+      res.end(); return;
     }
 
-    const alvos = productLimit > 0 ? produtos.slice(0, productLimit) : produtos;
-    send("log", { msg: `📦 ${produtos.length} produtos | gerando reviews para ${alvos.length}` });
+    send("products", { count: products.length });
+    log(`✅ ${products.length} produtos encontrados`);
 
-    const totalPorProduto = perProduct || 30;
-    let totalOk = 0, totalFail = 0;
-    const totalGeral = alvos.length * totalPorProduto;
-    let contador = 0;
-
-    for (const produto of alvos) {
-      send("log", { msg: `\n📝 ${produto.title.slice(0, 50)}` });
-
-      // Monta distribuição por peso
-      const fila = [];
-      for (const t of REVIEW_TIPOS) {
-        const qtd = Math.round((t.peso / 100) * totalPorProduto);
-        for (let i = 0; i < qtd; i++) fila.push(t);
+    // 2. Gera imagens via DALL-E se configurado
+    const imagens = [];
+    if (useImages && openaiKey) {
+      const QTD_IMGS = 10;
+      log(`🎨 Gerando ${QTD_IMGS} imagens via DALL-E 3...`);
+      const prods_embaralhados = [...products].sort(() => Math.random() - 0.5);
+      for (let i = 0; i < QTD_IMGS; i++) {
+        const p = prods_embaralhados[i % prods_embaralhados.length];
+        try {
+          const imgRes = await fetch('https://api.openai.com/v1/images/generations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openaiKey}` },
+            body: JSON.stringify({ model: 'dall-e-3', prompt: `Person wearing or using ${p.title}, lifestyle photo, natural daylight, clean background, high quality fashion photography`, n: 1, size: '1024x1024', quality: 'hd' })
+          });
+          const imgData = await imgRes.json();
+          const url = imgData.data?.[0]?.url;
+          if (url) {
+            imagens.push(url);
+            log(`  🖼️ Imagem ${i+1}/${QTD_IMGS} gerada`);
+          }
+        } catch { log(`  ⚠️ Falha imagem ${i+1}`); }
+        await sleep(1200);
       }
-
-      let idx = 0;
-      for (const t of fila) {
-        const nome = REVIEW_NOMES[idx % REVIEW_NOMES.length];
-        const pais = REVIEW_PAISES[idx % REVIEW_PAISES.length];
-        idx++;
-
-        // Gera texto
-        let body = claudeKey ? await gerarReviewClaude(reviewPrompt(t.tipo, produto.title, pais), claudeKey) : null;
-        if (!body) body = reviewFallback(t.tipo, produto.title, pais);
-        if (claudeKey) await sleep(700);
-
-        const titulos = REVIEW_TITULOS[t.tipo] || ["Great product!"];
-        const titulo = titulos[Math.floor(Math.random() * titulos.length)];
-
-        // Data aleatória últimos 6 meses
-        const data = new Date();
-        data.setDate(data.getDate() - Math.floor(Math.random() * 180));
-
-        // Importa via Judge.me
-        let sucesso = false;
-        if (judgemeToken) {
-          try {
-            const jr = await fetch("https://judge.me/api/v1/reviews", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                api_token: judgemeToken, shop_domain: shop, platform: "shopify",
-                id: produto.id, email: `${nome.toLowerCase().replace(/[^a-z]/g,"")}${idx}@gmail.com`,
-                name: nome, rating: t.rating, title: titulo, body, created_at: data.toISOString(),
-              }),
-            });
-            sucesso = jr.ok;
-          } catch {}
-        }
-
-        if (sucesso) totalOk++; else totalFail++;
-        contador++;
-        send("progress", { step: "Reviews", current: contador, total: totalGeral });
-        await sleep(250);
-      }
+      log(`✅ ${imagens.length} imagens prontas`);
     }
 
-    send("log", { msg: `\n✅ ${totalOk} reviews importadas | ❌ ${totalFail} erros`, status: "success" });
-    if (!judgemeToken) send("log", { msg: "⚠️ Sem Judge.me token — configura na aba pra importar de verdade", status: "error" });
-    send("done", { msg: "🎉 Reviews completas!" });
-  } catch (err) {
-    send("error", { msg: `💥 ${err.message}` });
+    // 3. Distribui reviews pelos produtos
+    const reviewsPorProduto = Math.ceil(qty / products.length);
+    let criadas = 0;
+
+    for (const product of products) {
+      const qtdProd = Math.min(reviewsPorProduto, qty - criadas);
+      if (qtdProd <= 0) break;
+
+      for (let i = 0; i < qtdProd; i++) {
+        const stars = Math.random() * 100 < (fivePct || 85) ? 5 : 4;
+        const nome = rand(NOMES);
+        const texto = stars === 5 ? rand(TEXTOS5) : rand(TEXTOS4);
+        const titulo = stars === 5 ? rand(TITULOS5) : rand(TITULOS4);
+        const usarImg = imagens.length > 0 && criadas % 8 === 0;
+        const imgUrl = usarImg ? imagens[Math.floor(Math.random() * imagens.length)] : null;
+
+        const body = {
+          api_token: token,
+          shop_domain: shop,
+          platform: 'shopify',
+          id: product.external_id,
+          title: titulo,
+          body: texto,
+          rating: stars,
+          name: nome,
+          email: emailRand(nome),
+          picture_urls: imgUrl ? [imgUrl] : [],
+          verified_buyer: Math.random() > 0.3,
+          featured: Math.random() > 0.7,
+          curated: 'ok',
+          published: true,
+        };
+
+        try {
+          const r = await fetch('https://judge.me/api/v1/reviews', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          if (r.status === 200 || r.status === 201) {
+            criadas++;
+            send("review", { stars, name: nome, img: !!imgUrl });
+          } else {
+            const err = await r.json();
+            log(`  ⚠️ Erro: ${JSON.stringify(err)}`);
+          }
+        } catch(e) { log(`  ⚠️ Exceção: ${e.message}`); }
+
+        await sleep(300);
+      }
+      if (criadas >= qty) break;
+    }
+
+    send("done", { total: criadas });
+  } catch(err) {
+    send("error", { msg: err.message });
   }
   res.end();
 });

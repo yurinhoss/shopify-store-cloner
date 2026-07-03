@@ -195,6 +195,21 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
           <label class="option-item"><input type="checkbox" id="opt-shipping" checked> 🚚 Shipping</label>
           <label class="option-item"><input type="checkbox" id="opt-discounts" checked> 🏷️ Discounts</label>
         </div>
+
+        <!-- 📦 VALORES DE FRETE CUSTOMIZÁVEIS -->
+        <div id="shipping-values" style="margin-top:14px;padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--bg)">
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px">🚚 Valores de Frete (em EUR — convertido automático pra moeda da loja)</div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:160px">
+              <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px">📦 Frete Padrão</label>
+              <input type="number" id="ship-standard" value="4.90" min="0" step="0.10" style="width:100%;padding:9px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box">
+            </div>
+            <div style="flex:1;min-width:160px">
+              <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px">⚡ Frete Expresso</label>
+              <input type="number" id="ship-express" value="9.70" min="0" step="0.10" style="width:100%;padding:9px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box">
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -313,13 +328,20 @@ async function startClone() {
   const customize={originName:document.getElementById('origin-name').value.trim(),originEmail:document.getElementById('origin-email').value.trim(),destName:document.getElementById('dest-name').value.trim(),destEmail:document.getElementById('dest-email').value.trim()};
   if(!origin.shop||!destination.shop){alert('Fill in both store credentials');return;}
   const options={products:document.getElementById('opt-products').checked,collections:document.getElementById('opt-collections').checked,pages:document.getElementById('opt-pages').checked,menus:document.getElementById('opt-menus').checked,policies:document.getElementById('opt-policies').checked,files:document.getElementById('opt-files').checked,theme:document.getElementById('opt-theme').checked,markets:document.getElementById('opt-markets').checked,shipping:document.getElementById('opt-shipping').checked,discounts:document.getElementById('opt-discounts').checked};
+
+  // 📦 Captura os valores de frete escolhidos (em EUR)
+  const shippingCosts={
+    standard: parseFloat(document.getElementById('ship-standard').value) || 4.90,
+    express: parseFloat(document.getElementById('ship-express').value) || 9.70
+  };
+  if(shippingCosts.standard<=0||shippingCosts.express<=0){alert('❌ Valores de frete devem ser maiores que 0');return;}
   const btn=document.getElementById('btn-clone');btn.disabled=true;btn.textContent='⏳ Cloning in progress...';
   const wrap=document.getElementById('progress-wrap'),logArea=document.getElementById('log-area'),bar=document.getElementById('progress-bar'),step=document.getElementById('progress-step'),pct=document.getElementById('progress-pct'),done=document.getElementById('done-banner');
   wrap.classList.add('active');logArea.innerHTML='';done.classList.remove('active');
 
   try {
     // Inicia o job — retorna jobId imediatamente
-    const startRes = await fetch('/api/clone-start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({origin,destination,options,customize})});
+    const startRes = await fetch('/api/clone-start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({origin,destination,options,customize,shippingCosts})});
     const {jobId} = await startRes.json();
     _cloneJobId = jobId;
     await connectToJob(jobId, logArea, bar, step, pct, done);
