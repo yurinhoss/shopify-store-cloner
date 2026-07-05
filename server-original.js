@@ -152,11 +152,8 @@ app.post("/api/auth", async (req, res) => {
 // ============================================================
 //  API: CLONE (SSE — Server-Sent Events)
 // ============================================================
-// ============================================================
-//  LÓGICA DO CLONE — roda em background, mandando eventos pro job
-// ============================================================
-const runClone = async (body, send) => {
-  const { origin, destination, options, customize } = body;
+app.post("/api/clone", async (req, res) => {
+  const { origin, destination, options, customize } = req.body;
 
   // Função que substitui nome da loja e email em qualquer texto
   function replaceContent(text) {
@@ -173,6 +170,14 @@ const runClone = async (body, send) => {
     }
     return result;
   }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const send = (type, data) => {
+    res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+  };
 
   const log = (msg, status = "info") => send("log", { msg, status });
   const progress = (step, current, total) => send("progress", { step, current, total });
@@ -430,75 +435,44 @@ const runClone = async (body, send) => {
       }
       log(`📁 ${arquivos.length} arquivos encontrados`);
 
-      // ── FASE 1: Upload de todos os arquivos ──
-      // duplicateResolutionMode REPLACE garante que o arquivo mantém o MESMO nome
-      // na loja destino (sem sufixo aleatório). Isso é essencial porque o tema
-      // referencia banners por "shopify://shop_images/nome-do-arquivo.jpg" —
-      // se o nome mudar, o banner some.
+      // Mapa URL origem → URL destino (para substituir no tema depois)
+      const urlMap = {};
       let uploaded = 0;
       for (let i = 0; i < arquivos.length; i++) {
         const arq = arquivos[i];
         progress("files", i + 1, arquivos.length);
         try {
+          // Baixa como base64 pra garantir o upload mesmo de CDN protegido
           const b64 = await downloadBase64(arq.url);
-          const ext = arq.filename.split(".").pop().toLowerCase();
-          const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
-          const isImage = ["png","gif","webp","svg","jpg","jpeg","avif","heic"].includes(ext);
-          const input = {
-            filename: arq.filename,
-            alt: arq.alt,
-            contentType: isImage ? "IMAGE" : "FILE",
-            duplicateResolutionMode: "REPLACE",
-            originalSource: b64 ? `data:${mime};base64,${b64}` : arq.url,
-          };
-          const r = await gql(destination.shop,
-            `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
-            { files: [input] }, tokenDest);
-          if ((r.fileCreate?.userErrors || []).length === 0) uploaded++;
+          if (b64) {
+            const ext = arq.filename.split(".").pop().toLowerCase();
+            const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
+            const r = await gql(destination.shop,
+              `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{...on MediaImage{image{url}}}userErrors{message}}}`,
+              { files: [{ originalSource: `data:${mime};base64,${b64}`, contentType: "IMAGE", filename: arq.filename }] },
+              tokenDest);
+            const novaUrl = r.fileCreate?.files?.[0]?.image?.url;
+            if (novaUrl) urlMap[arq.url] = novaUrl;
+            uploaded++;
+          } else {
+            // Fallback: passa URL diretamente
+            await gql(destination.shop, `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
+              { files: [{ originalSource: arq.url, alt: arq.alt, contentType: "IMAGE" }] }, tokenDest);
+            uploaded++;
+          }
         } catch {}
         await sleep(200);
       }
-      log(`✅ Arquivos: ${uploaded}/${arquivos.length} enviados. Aguardando processamento...`);
+      log(`✅ Arquivos: ${uploaded} enviados | ${Object.keys(urlMap).length} URLs mapeadas`, "success");
+      await sleep(3000); // aguarda Shopify processar
 
-      // ── FASE 2: Espera a Shopify processar e busca as URLs REAIS no destino ──
-      // (Antes o código pegava a URL na hora do upload, mas ela vem vazia
-      //  enquanto a imagem ainda está processando — por isso os banners quebravam)
-      const filenameMapDest = {}; // nome do arquivo → URL nova no destino
-      for (let tentativa = 1; tentativa <= 6; tentativa++) {
-        await sleep(5000);
-        let cursorD = null, prontos = 0;
-        try {
-          while (true) {
-            const after = cursorD ? `, after: "${cursorD}"` : "";
-            const q = `query { files(first: 100${after}) { edges { cursor node { ... on MediaImage { image { url } fileStatus } ... on GenericFile { url fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
-            const d = await gql(destination.shop, q, {}, tokenDest);
-            for (const e of d.files.edges) {
-              const n = e.node;
-              const u = n?.image?.url || n?.url;
-              if (u && n.fileStatus === "READY") {
-                const fname = u.split("/").pop().split("?")[0];
-                filenameMapDest[fname] = u;
-                prontos++;
-              }
-            }
-            if (!d.files.pageInfo.hasNextPage) break;
-            cursorD = d.files.pageInfo.endCursor;
-          }
-        } catch {}
-        log(`⏳ Tentativa ${tentativa}/6 — ${prontos} arquivos prontos no destino`);
-        if (prontos >= arquivos.length) break;
+      // Guarda urlMap no contexto para usar no tema
+      if (Object.keys(urlMap).length > 0) {
+        log(`🔄 URLs de CDN mapeadas para substituição no tema`);
+        // Armazena no objeto customize para reutilizar no tema
+        customize._urlMap = urlMap;
+        customize._originShopCDN = origin.shop.replace(".myshopify.com", "");
       }
-
-      // ── FASE 3: Monta o mapa URL origem → URL destino (casando pelo nome) ──
-      const urlMap = {};
-      for (const arq of arquivos) {
-        const destUrl = filenameMapDest[arq.filename];
-        if (destUrl) urlMap[arq.url] = destUrl;
-      }
-      log(`🔄 ${Object.keys(urlMap).length} URLs mapeadas para substituição no tema`, "success");
-      customize._urlMap = urlMap;
-      customize._filenameMapDest = filenameMapDest;
-      customize._originShopCDN = origin.shop.replace(".myshopify.com", "");
     }
 
     // ==== TEMA ====
@@ -511,225 +485,222 @@ const runClone = async (body, send) => {
 
       if (tOrigem && tDestino) {
         const assetsOrig = await restCall("GET", origin.shop, `/themes/${tOrigem.id}/assets.json`, tokenOrig);
+        const keys = (assetsOrig.assets || []).map((a) => a.key).filter((k) =>
+          k.startsWith("config/") || k.startsWith("templates/") || k.startsWith("sections/") ||
+          k.startsWith("snippets/") || k.startsWith("layout/") || k.startsWith("locales/") ||
+          (k.startsWith("assets/") && (k.endsWith(".css") || k.endsWith(".js") || k.endsWith(".json") || k.endsWith(".svg")))
+        );
 
-        // Agora copia TODOS os assets — incluindo imagens/fonts dentro de assets/
-        // (antes só copiava .css/.js/.json/.svg, e os banners que vivem DENTRO
-        //  do tema como assets/banner.jpg nunca eram copiados)
-        let keys = (assetsOrig.assets || []).map((a) => a.key);
-
-        // Ordem importa: settings_data.json (onde ficam os banners da home)
-        // vai por ÚLTIMO, depois que sections/templates/imagens já existem.
-        const peso = (k) => {
-          if (k === "config/settings_data.json") return 99;
-          if (k.startsWith("config/")) return 90;
-          if (k.startsWith("templates/")) return 50;
-          if (k.startsWith("sections/")) return 40;
-          if (k.startsWith("snippets/")) return 30;
-          if (k.startsWith("layout/")) return 20;
-          if (k.startsWith("locales/")) return 60;
-          return 10; // assets/ primeiro (imagens do tema disponíveis antes)
-        };
-        keys.sort((a, b) => peso(a) - peso(b));
-
-        // Função que troca QUALQUER url do CDN da origem pela do destino,
-        // casando pelo NOME do arquivo (mais robusto que URL exata, porque
-        // a Shopify muda os caminhos internos entre lojas)
-        const trocarUrls = (value) => {
-          if (customize._urlMap) {
-            for (const [origUrl, destUrl] of Object.entries(customize._urlMap)) {
-              value = value.split(origUrl).join(destUrl);
-              const origBase = origUrl.split("?")[0];
-              const destBase = destUrl.split("?")[0];
-              if (origBase !== origUrl) value = value.split(origBase).join(destBase);
-            }
-          }
-          if (customize._filenameMapDest) {
-            for (const [fname, destUrl] of Object.entries(customize._filenameMapDest)) {
-              // regex: qualquer https://cdn.shopify.com/....../NOME-DO-ARQUIVO(?v=123)
-              const esc = fname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-              const re = new RegExp(`(?:https?:)?//cdn\\.shopify\\.com/[^"'\\\\)\\s]*?/${esc}(?:\\?[^"'\\\\)\\s]*)?`, "g");
-              value = value.replace(re, destUrl.split("?")[0]);
-            }
-          }
-          if (customize._originShopCDN) {
-            value = value.split(customize._originShopCDN).join(destination.shop.replace(".myshopify.com", ""));
-          }
-          return value;
-        };
-
-        log(`📁 ${keys.length} assets do tema a copiar (incluindo imagens do tema)`);
-        let copiados = 0, falhas = 0;
+        log(`📁 ${keys.length} assets do tema a copiar`);
+        let copiados = 0;
         for (let i = 0; i < keys.length; i++) {
           progress("theme", i + 1, keys.length);
           try {
             const ad = await restCall("GET", origin.shop, `/themes/${tOrigem.id}/assets.json?asset[key]=${encodeURIComponent(keys[i])}`, tokenOrig);
             const putBody = { asset: { key: keys[i] } };
             if (ad.asset?.value !== undefined) {
-              putBody.asset.value = trocarUrls(replaceContent(ad.asset.value));
+              let value = replaceContent(ad.asset.value);
+              // Substitui URLs do CDN da origem pelas novas URLs do destino
+              if (customize._urlMap) {
+                for (const [origUrl, destUrl] of Object.entries(customize._urlMap)) {
+                  value = value.split(origUrl).join(destUrl);
+                  // Também tenta sem parâmetros de query
+                  const origBase = origUrl.split("?")[0];
+                  const destBase = destUrl.split("?")[0];
+                  if (origBase !== origUrl) value = value.split(origBase).join(destBase);
+                }
+              }
+              // Substitui referências ao shop da origem (shopify CDN genérico)
+              if (customize._originShopCDN) {
+                value = value.split(customize._originShopCDN).join(destination.shop.replace(".myshopify.com", ""));
+              }
+              putBody.asset.value = value;
             } else if (ad.asset?.attachment) {
-              // Binário (imagens, fonts do tema) — copia direto em base64
               putBody.asset.attachment = ad.asset.attachment;
             } else continue;
             await restCall("PUT", destination.shop, `/themes/${tDestino.id}/assets.json`, tokenDest, putBody);
             copiados++;
-          } catch { falhas++; }
+          } catch {}
           await sleep(80);
         }
-        log(`✅ Tema: ${copiados} assets copiados | ${falhas} falhas`, "success");
+        log(`✅ Tema: ${copiados} assets copiados`, "success");
       }
     }
 
-    // ==== MARKETS: CLONE EXATO DA ORIGEM (países + moeda + idiomas + URL) ====
+    // ==== MARKETS GLOBAIS + IDIOMAS + SUBFOLDERS ====
     if (options.markets) {
-      log("━━━━━━━━━━ ETAPA 9: MARKETS (clone exato da origem) ━━━━━━━━━━");
+      log("━━━━━━━━━━ ETAPA 9: MARKETS + IDIOMAS + SUBFOLDERS ━━━━━━━━━━");
 
-      // ── 9.1 IDIOMAS: instala e publica no destino os MESMOS idiomas da origem ──
-      const locOrig = await gql(origin.shop, `query { shopLocales { locale primary published } }`, {}, tokenOrig);
-      const locDest = await gql(destination.shop, `query { shopLocales { locale primary published } }`, {}, tokenDest);
-      const instalados = new Set(locDest.shopLocales.map(l => l.locale));
-
-      const idiomasOrigem = locOrig.shopLocales.filter(l => !l.primary);
-      log(`📚 Origem tem ${locOrig.shopLocales.length} idiomas | Destino tem ${instalados.size}`);
-
-      for (const l of idiomasOrigem) {
-        if (!instalados.has(l.locale)) {
-          try {
-            await gql(destination.shop,
-              `mutation($locale:String!){shopLocaleEnable(locale:$locale){userErrors{message}}}`,
-              { locale: l.locale }, tokenDest);
-            instalados.add(l.locale);
-            log(`  ➕ Idioma instalado: ${l.locale}`);
-          } catch (e) { log(`  ⚠️ Não instalou ${l.locale}: ${e.message.slice(0,60)}`); }
-          await sleep(150);
-        }
-        if (l.published) {
-          try {
-            await gql(destination.shop,
-              `mutation($locale:String!,$sl:ShopLocaleInput!){shopLocaleUpdate(locale:$locale,shopLocale:$sl){userErrors{message}}}`,
-              { locale: l.locale, sl: { published: true } }, tokenDest);
-          } catch {}
-          await sleep(100);
-        }
-      }
-
-      // ── 9.2 LÊ os markets da ORIGEM com toda a configuração ──
-      // (webPresence: tenta o formato novo da API; se falhar, usa o antigo)
-      const lerMarkets = async (shop, token) => {
-        const base = `id name enabled regions(first: 250) { edges { node { ... on MarketRegionCountry { code } } } } currencySettings { baseCurrency { currencyCode } localCurrencies }`;
-        let q = `query { markets(first: 100) { edges { node { ${base} webPresence { id defaultLocale alternateLocales subfolderSuffix } } } } }`;
-        try {
-          const d = await gql(shop, q, {}, token);
-          return d.markets.edges.map(e => e.node);
-        } catch {
-          // Formato novo: defaultLocale/alternateLocales viram objetos
-          q = `query { markets(first: 100) { edges { node { ${base} webPresence { id defaultLocale { locale } alternateLocales { locale } subfolderSuffix } } } } }`;
-          const d = await gql(shop, q, {}, token);
-          return d.markets.edges.map(e => {
-            const n = e.node;
-            if (n.webPresence) {
-              n.webPresence.defaultLocale = n.webPresence.defaultLocale?.locale || n.webPresence.defaultLocale;
-              n.webPresence.alternateLocales = (n.webPresence.alternateLocales || []).map(a => a.locale || a);
-            }
-            return n;
-          });
-        }
+      // Mapa país → idioma primário + alternates + moeda
+      // Idiomas múltiplos para países poliglotas (Suíça, Bélgica, Canadá, etc.)
+      const MARKET_MAP = {
+        // Europa UE — EUR
+        "DE": { name:"Germany",         primary:"de",    alternates:["en"],            currency:"EUR" },
+        "AT": { name:"Austria",          primary:"de",    alternates:["en"],            currency:"EUR" },
+        "FR": { name:"France",           primary:"fr",    alternates:["en"],            currency:"EUR" },
+        "BE": { name:"Belgium",          primary:"fr",    alternates:["nl","en"],       currency:"EUR" },
+        "LU": { name:"Luxembourg",       primary:"fr",    alternates:["de","en"],       currency:"EUR" },
+        "IT": { name:"Italy",            primary:"it",    alternates:["en"],            currency:"EUR" },
+        "ES": { name:"Spain",            primary:"es",    alternates:["en"],            currency:"EUR" },
+        "PT": { name:"Portugal",         primary:"pt-PT", alternates:["en"],            currency:"EUR" },
+        "NL": { name:"Netherlands",      primary:"nl",    alternates:["en"],            currency:"EUR" },
+        "GR": { name:"Greece",           primary:"el",    alternates:["en"],            currency:"EUR" },
+        "FI": { name:"Finland",          primary:"en",    alternates:[],                currency:"EUR" },
+        "IE": { name:"Ireland",          primary:"en",    alternates:[],                currency:"EUR" },
+        "SK": { name:"Slovakia",         primary:"sk",    alternates:["en"],            currency:"EUR" },
+        "HR": { name:"Croatia",          primary:"hr",    alternates:["en"],            currency:"EUR" },
+        "CY": { name:"Cyprus",           primary:"el",    alternates:["tr","en"],       currency:"EUR" },
+        "EE": { name:"Estonia",          primary:"en",    alternates:[],                currency:"EUR" },
+        "LV": { name:"Latvia",           primary:"en",    alternates:[],                currency:"EUR" },
+        "LT": { name:"Lithuania",        primary:"en",    alternates:[],                currency:"EUR" },
+        "SI": { name:"Slovenia",         primary:"en",    alternates:[],                currency:"EUR" },
+        "MT": { name:"Malta",            primary:"en",    alternates:[],                currency:"EUR" },
+        // Europa moeda própria
+        "GB": { name:"United Kingdom",   primary:"en",    alternates:[],                currency:"GBP" },
+        "CH": { name:"Switzerland",      primary:"de",    alternates:["fr","it","en"],  currency:"CHF" },
+        "SE": { name:"Sweden",           primary:"sv",    alternates:["en"],            currency:"SEK" },
+        "NO": { name:"Norway",           primary:"no",    alternates:["en"],            currency:"NOK" },
+        "DK": { name:"Denmark",          primary:"da",    alternates:["en"],            currency:"DKK" },
+        "PL": { name:"Poland",           primary:"pl",    alternates:["en"],            currency:"PLN" },
+        "CZ": { name:"Czech Republic",   primary:"cs",    alternates:["en"],            currency:"CZK" },
+        "HU": { name:"Hungary",          primary:"hu",    alternates:["en"],            currency:"HUF" },
+        "RO": { name:"Romania",          primary:"ro",    alternates:["en"],            currency:"RON" },
+        "BG": { name:"Bulgaria",         primary:"bg",    alternates:["en"],            currency:"BGN" },
+        "TR": { name:"Turkey",           primary:"tr",    alternates:["en"],            currency:"TRY" },
+        // Europa extra
+        "AL": { name:"Albania",          primary:"en",    alternates:[],                currency:"ALL" },
+        "BA": { name:"Bosnia",           primary:"en",    alternates:[],                currency:"BAM" },
+        "RS": { name:"Serbia",           primary:"en",    alternates:[],                currency:"RSD" },
+        "MK": { name:"North Macedonia",  primary:"en",    alternates:[],                currency:"MKD" },
+        "IS": { name:"Iceland",          primary:"en",    alternates:[],                currency:"ISK" },
+        "ME": { name:"Montenegro",       primary:"en",    alternates:[],                currency:"EUR" },
+        "XK": { name:"Kosovo",           primary:"en",    alternates:[],                currency:"EUR" },
+        "MD": { name:"Moldova",          primary:"ro",    alternates:["en"],            currency:"MDL" },
+        // Américas
+        "US": { name:"United States",    primary:"en",    alternates:[],                currency:"USD" },
+        "CA": { name:"Canada",           primary:"en",    alternates:["fr"],            currency:"CAD" },
+        "MX": { name:"Mexico",           primary:"es",    alternates:["en"],            currency:"MXN" },
+        "BR": { name:"Brazil",           primary:"en",    alternates:[],                currency:"BRL" },
+        "AR": { name:"Argentina",        primary:"es",    alternates:["en"],            currency:"ARS" },
+        "CL": { name:"Chile",            primary:"es",    alternates:["en"],            currency:"CLP" },
+        "CO": { name:"Colombia",         primary:"es",    alternates:["en"],            currency:"COP" },
+        "PE": { name:"Peru",             primary:"es",    alternates:["en"],            currency:"PEN" },
+        "UY": { name:"Uruguay",          primary:"es",    alternates:["en"],            currency:"UYU" },
+        "EC": { name:"Ecuador",          primary:"es",    alternates:["en"],            currency:"USD" },
+        "GT": { name:"Guatemala",        primary:"es",    alternates:["en"],            currency:"GTQ" },
+        "DO": { name:"Dominican Rep.",   primary:"es",    alternates:["en"],            currency:"DOP" },
+        "BO": { name:"Bolivia",          primary:"es",    alternates:["en"],            currency:"BOB" },
+        "PY": { name:"Paraguay",         primary:"es",    alternates:["en"],            currency:"PYG" },
+        "VE": { name:"Venezuela",        primary:"es",    alternates:["en"],            currency:"USD" },
+        "CR": { name:"Costa Rica",       primary:"es",    alternates:["en"],            currency:"CRC" },
+        "PA": { name:"Panama",           primary:"es",    alternates:["en"],            currency:"USD" },
+        // Ásia / Pacífico
+        "JP": { name:"Japan",            primary:"ja",    alternates:["en"],            currency:"JPY" },
+        "KR": { name:"South Korea",      primary:"en",    alternates:[],                currency:"KRW" },
+        "SG": { name:"Singapore",        primary:"en",    alternates:[],                currency:"SGD" },
+        "HK": { name:"Hong Kong",        primary:"en",    alternates:[],                currency:"HKD" },
+        "TW": { name:"Taiwan",           primary:"en",    alternates:[],                currency:"TWD" },
+        "AU": { name:"Australia",        primary:"en",    alternates:[],                currency:"AUD" },
+        "NZ": { name:"New Zealand",      primary:"en",    alternates:[],                currency:"NZD" },
+        "CN": { name:"China",            primary:"en",    alternates:[],                currency:"CNY" },
+        "IN": { name:"India",            primary:"en",    alternates:[],                currency:"INR" },
+        "TH": { name:"Thailand",         primary:"en",    alternates:[],                currency:"THB" },
+        "PH": { name:"Philippines",      primary:"en",    alternates:[],                currency:"PHP" },
+        "MY": { name:"Malaysia",         primary:"en",    alternates:[],                currency:"MYR" },
+        "ID": { name:"Indonesia",        primary:"en",    alternates:[],                currency:"IDR" },
+        "VN": { name:"Vietnam",          primary:"en",    alternates:[],                currency:"VND" },
+        "PK": { name:"Pakistan",         primary:"en",    alternates:[],                currency:"PKR" },
+        "BD": { name:"Bangladesh",       primary:"en",    alternates:[],                currency:"BDT" },
+        // Médio Oriente / África
+        "AE": { name:"UAE",              primary:"en",    alternates:[],                currency:"AED" },
+        "SA": { name:"Saudi Arabia",     primary:"en",    alternates:[],                currency:"SAR" },
+        "IL": { name:"Israel",           primary:"en",    alternates:[],                currency:"ILS" },
+        "ZA": { name:"South Africa",     primary:"en",    alternates:[],                currency:"ZAR" },
+        "MA": { name:"Morocco",          primary:"fr",    alternates:["en"],            currency:"MAD" },
+        "EG": { name:"Egypt",            primary:"en",    alternates:[],                currency:"EGP" },
+        "QA": { name:"Qatar",            primary:"en",    alternates:[],                currency:"QAR" },
+        "KW": { name:"Kuwait",           primary:"en",    alternates:[],                currency:"KWD" },
+        "NG": { name:"Nigeria",          primary:"en",    alternates:[],                currency:"NGN" },
+        "KE": { name:"Kenya",            primary:"en",    alternates:[],                currency:"KES" },
+        "GH": { name:"Ghana",            primary:"en",    alternates:[],                currency:"GHS" },
+        "TZ": { name:"Tanzania",         primary:"en",    alternates:[],                currency:"TZS" },
       };
 
-      const marketsOrig = await lerMarkets(origin.shop, tokenOrig);
-      const marketsDest = await lerMarkets(destination.shop, tokenDest);
-      log(`🌍 Origem: ${marketsOrig.length} markets | Destino: ${marketsDest.length} markets`);
+      // Gera subfolder único por país: idioma+país (sem hífen)
+      // Casos especiais: pt-PT vira "pt", evitando "ptpt"
+      const subfolderPorPais = (code, primary) => {
+        let lang = primary.toLowerCase();
+        if (lang.includes("-")) lang = lang.split("-")[0]; // pt-PT → pt
+        return `${lang}${code.toLowerCase()}`;
+      };
 
-      // Índices do destino: por nome e por país (para saber o que já existe)
-      const destPorNome = {};
-      const paisesNoDest = new Set();
-      for (const m of marketsDest) {
-        destPorNome[m.name.toLowerCase()] = m;
-        for (const r of m.regions.edges) if (r.node.code) paisesNoDest.add(r.node.code);
-      }
+      // Lista idiomas instalados na loja destino
+      const instaladosResp = await gql(destination.shop,
+        `query { shopLocales { locale primary published } }`, {}, tokenDest);
+      const locaisInstalados = new Set(instaladosResp.shopLocales.map(l => l.locale));
+      log(`📚 ${locaisInstalados.size} idiomas instalados na loja: ${[...locaisInstalados].join(", ")}`);
 
-      // ── 9.3 Recria cada market da origem no destino, idêntico ──
-      let mkCriados = 0, mkAtualizados = 0, mkErros = 0;
-      for (let i = 0; i < marketsOrig.length; i++) {
-        const mo = marketsOrig[i];
-        progress("markets", i + 1, marketsOrig.length);
-        const paisesOrig = mo.regions.edges.map(r => r.node.code).filter(Boolean);
-        if (paisesOrig.length === 0) continue;
-
-        try {
-          let marketIdDest = destPorNome[mo.name.toLowerCase()]?.id;
-
-          if (!marketIdDest) {
-            // Cria o market só com os países que ainda não estão em outro market
-            const paisesLivres = paisesOrig.filter(c => !paisesNoDest.has(c));
-            if (paisesLivres.length === 0) { log(`  ⏭️ ${mo.name}: países já cobertos no destino`); continue; }
-            const r = await gql(destination.shop,
-              `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id}userErrors{field message}}}`,
-              { input: { name: mo.name, enabled: mo.enabled !== false, regions: paisesLivres.map(c => ({ countryCode: c })) } },
-              tokenDest);
-            if (r.marketCreate.userErrors.length > 0) {
-              log(`  ⚠️ ${mo.name}: ${r.marketCreate.userErrors[0].message.slice(0,70)}`);
-              mkErros++; continue;
-            }
-            marketIdDest = r.marketCreate.market.id;
-            paisesLivres.forEach(c => paisesNoDest.add(c));
-            mkCriados++;
-          } else {
-            mkAtualizados++;
-          }
-
-          // Moeda: copia EXATAMENTE a config da origem
-          const cs = mo.currencySettings || {};
-          try {
-            const inputMoeda = cs.localCurrencies
-              ? { localCurrencies: true }
-              : { baseCurrency: cs.baseCurrency?.currencyCode, localCurrencies: false };
-            if (inputMoeda.baseCurrency || inputMoeda.localCurrencies) {
-              await gql(destination.shop,
-                `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
-                { id: marketIdDest, i: inputMoeda }, tokenDest);
-            }
-          } catch (e) { log(`  ⚠️ Moeda ${mo.name}: ${e.message.slice(0,60)}`); }
-
-          // Idiomas + URL (subfolder): copia a webPresence da origem
-          const wpo = mo.webPresence;
-          if (wpo && wpo.defaultLocale) {
-            const alts = (wpo.alternateLocales || []).filter(l => instalados.has(l));
-            const wpInput = {
-              defaultLocale: wpo.defaultLocale,
-              alternateLocales: alts,
-            };
-            if (wpo.subfolderSuffix) wpInput.subfolderSuffix = wpo.subfolderSuffix;
-
-            if (instalados.has(wpo.defaultLocale) || locDest.shopLocales.some(l => l.primary && l.locale === wpo.defaultLocale)) {
-              try {
-                // Já tem webPresence no destino? Atualiza. Senão, cria.
-                const dWp = await gql(destination.shop,
-                  `query($id:ID!){market(id:$id){webPresence{id}}}`, { id: marketIdDest }, tokenDest);
-                const wpId = dWp.market?.webPresence?.id;
-                if (wpId) {
-                  const ru = await gql(destination.shop,
-                    `mutation($id:ID!,$wp:MarketWebPresenceUpdateInput!){marketWebPresenceUpdate(webPresenceId:$id,webPresence:$wp){userErrors{field message}}}`,
-                    { id: wpId, wp: wpInput }, tokenDest);
-                  if (ru.marketWebPresenceUpdate.userErrors.length > 0)
-                    log(`  ⚠️ URL ${mo.name}: ${ru.marketWebPresenceUpdate.userErrors[0].message.slice(0,70)}`);
-                } else {
-                  const rc = await gql(destination.shop,
-                    `mutation($mid:ID!,$wp:MarketWebPresenceCreateInput!){marketWebPresenceCreate(marketId:$mid,webPresence:$wp){userErrors{field message}}}`,
-                    { mid: marketIdDest, wp: wpInput }, tokenDest);
-                  if (rc.marketWebPresenceCreate.userErrors.length > 0)
-                    log(`  ⚠️ URL ${mo.name}: ${rc.marketWebPresenceCreate.userErrors[0].message.slice(0,70)}`);
-                }
-              } catch (e) { log(`  ⚠️ WebPresence ${mo.name}: ${e.message.slice(0,60)}`); }
-            }
-          }
-        } catch (e) {
-          mkErros++;
-          log(`  ❌ ${mo.name}: ${e.message.slice(0,70)}`);
+      // Lista países já em markets
+      const existingCountries = new Set();
+      try {
+        const mData = await gql(destination.shop, `
+          query { markets(first: 100) { edges { node { name regions(first: 100) { edges { node { ... on MarketRegionCountry { code } } } } } } } }
+        `, {}, tokenDest);
+        for (const e of mData.markets.edges) {
+          const regionCount = e.node.regions.edges.length;
+          if (regionCount > 10) { log(`⏭️ Ignorando market "${e.node.name}" (${regionCount} países — catch-all)`); continue; }
+          for (const r of e.node.regions.edges) if (r.node.code) existingCountries.add(r.node.code);
         }
-        await sleep(200);
+      } catch {}
+
+      const paisesParaCriar = Object.entries(MARKET_MAP).filter(([code]) => !existingCountries.has(code));
+      log(`🌍 ${existingCountries.size} países já cobertos | ${paisesParaCriar.length} a criar`);
+
+      let mkCriados = 0, mkComIdioma = 0;
+      for (let i = 0; i < paisesParaCriar.length; i++) {
+        const [code, cfg] = paisesParaCriar[i];
+        progress("markets", i + 1, paisesParaCriar.length);
+        try {
+          // 1. Cria market
+          const r = await gql(destination.shop,
+            `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id}userErrors{field message}}}`,
+            { input: { name: cfg.name, enabled: true, regions: [{ countryCode: code }] } }, tokenDest);
+
+          if (r.marketCreate.userErrors.length > 0) continue;
+          const marketId = r.marketCreate.market.id;
+          mkCriados++;
+
+          // 2. Ativa moeda local
+          try {
+            await gql(destination.shop,
+              `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
+              { id: marketId, i: { localCurrencies: true } }, tokenDest);
+          } catch {}
+
+          // 3. Filtra alternates pelos idiomas instalados
+          const altsValidos = cfg.alternates.filter(l => locaisInstalados.has(l));
+
+          // 4. Cria webPresence com idioma primário + alternates + subfolder único
+          if (locaisInstalados.has(cfg.primary)) {
+            const subfolder = subfolderPorPais(code, cfg.primary);
+            try {
+              const wpRes = await gql(destination.shop,
+                `mutation($mid:ID!,$wp:MarketWebPresenceCreateInput!){
+                  marketWebPresenceCreate(marketId:$mid,webPresence:$wp){
+                    market{id name}
+                    userErrors{field message}
+                  }
+                }`,
+                { mid: marketId, wp: { defaultLocale: cfg.primary, alternateLocales: altsValidos, subfolderSuffix: subfolder } },
+                tokenDest);
+              if (wpRes.marketWebPresenceCreate.userErrors.length === 0) mkComIdioma++;
+            } catch {}
+          }
+
+        } catch {}
+        await sleep(150);
       }
-      log(`✅ Markets: ${mkCriados} criados | ${mkAtualizados} atualizados (já existiam) | ${mkErros} erros`, "success");
-      log(`💡 Confere em Settings → Markets: países, moedas, idiomas e subfolders devem estar idênticos à origem`);
+      log(`✅ Markets: ${mkCriados} criados | ${mkComIdioma} com idioma + subfolder configurados`, "success");
     }
 
     // ==== FRETES POR PAÍS ====
@@ -1045,160 +1016,10 @@ const runClone = async (body, send) => {
       }
     }
 
-    // ==== ETAPA 12: CHECKLIST DO QUE FALTA CONFIGURAR ====
-    // Compara origem × destino no que a API deixa LER, e monta a lista
-    // do que a Shopify obriga a fazer manualmente (pagamentos, domínio, etc.)
-    try {
-      log("━━━━━━━━━━ ETAPA 12: CHECKLIST FINAL ━━━━━━━━━━");
-      const handle = destination.shop.replace(".myshopify.com", "");
-      const adm = (p) => `https://admin.shopify.com/store/${handle}${p}`;
-
-      let sOr = {}, sDe = {}, metaOrig = "";
-      try { sOr = (await restCall("GET", origin.shop, "/shop.json", tokenOrig)).shop || {}; } catch {}
-      try { sDe = (await restCall("GET", destination.shop, "/shop.json", tokenDest)).shop || {}; } catch {}
-      try { metaOrig = (await gql(origin.shop, `query { shop { description } }`, {}, tokenOrig)).shop?.description || ""; } catch {}
-
-      const temDominio = sDe.domain && !sDe.domain.includes(".myshopify.com");
-
-      const items = [
-        {
-          id: "pagamentos", titulo: "Pagamentos", url: adm("/settings/payments"), auto: false,
-          desc: "Ativar Shopify Payments ou outro gateway. A Shopify NUNCA deixa clonar isso via API (proteção contra fraude).",
-        },
-        {
-          id: "dominio", titulo: "Domínio personalizado", url: adm("/settings/domains"), auto: temDominio,
-          desc: temDominio
-            ? `Já conectado: ${sDe.domain} ✓`
-            : `Conectar o domínio próprio da loja (hoje está em ${sDe.domain || destination.shop}).`,
-        },
-        {
-          id: "preferencias", titulo: "Preferências da loja virtual", url: adm("/online_store/preferences"), auto: false,
-          desc: `Título da home, meta description, imagem social e senha da loja. A API não escreve aqui. Meta description da origem para copiar: "${(metaOrig || "(vazia)").slice(0, 200)}"`,
-        },
-        {
-          id: "moeda", titulo: "Moeda principal da loja", url: adm("/settings/general"),
-          auto: !!(sOr.currency && sDe.currency && sOr.currency === sDe.currency),
-          desc: sOr.currency === sDe.currency
-            ? `As duas lojas usam ${sDe.currency} ✓`
-            : `Origem usa ${sOr.currency || "?"} e destino usa ${sDe.currency || "?"} — ajustar em Settings → General → Store currency (só dá pra mudar antes da primeira venda).`,
-        },
-        {
-          id: "idioma", titulo: "Idioma principal da loja", url: adm("/settings/languages"),
-          auto: !!(sOr.primary_locale && sDe.primary_locale && sOr.primary_locale === sDe.primary_locale),
-          desc: sOr.primary_locale === sDe.primary_locale
-            ? `As duas lojas usam "${sDe.primary_locale}" como idioma principal ✓`
-            : `Origem: "${sOr.primary_locale || "?"}" | Destino: "${sDe.primary_locale || "?"}" — o idioma PRINCIPAL só muda pelo admin.`,
-        },
-        {
-          id: "checkout", titulo: "Checkout", url: adm("/settings/checkout"), auto: false,
-          desc: "Conferir campos do cliente, e-mail x telefone, dicas de gorjeta e configurações de conta — a API não clona essa tela.",
-        },
-        {
-          id: "impostos", titulo: "Impostos e taxas", url: adm("/settings/taxes"), auto: false,
-          desc: "Conferir se a cobrança de impostos (IVA na Europa) está configurada igual à origem.",
-        },
-        {
-          id: "email", titulo: "E-mail do remetente", url: adm("/settings/notifications"),
-          auto: !!(customize?.destEmail && sDe.email && sDe.email.toLowerCase() === customize.destEmail.toLowerCase()),
-          desc: `Verificar o e-mail que aparece pros clientes (sender email). Destino hoje: ${sDe.email || "?"}.`,
-        },
-        {
-          id: "apps", titulo: "Apps de terceiros", url: adm("/settings/apps"), auto: false,
-          desc: "Reinstalar e configurar apps (Judge.me, upsell, etc.) — cada app guarda os dados no servidor dele, fora da Shopify.",
-        },
-        {
-          id: "pixel", titulo: "Meta Pixel / rastreamento", url: adm("/settings/customer_events"), auto: false,
-          desc: "Reconectar o Pixel do Meta e outros rastreamentos na loja nova (cada loja precisa do seu).",
-        },
-        {
-          id: "envio-config", titulo: "Revisar fretes e Markets", url: adm("/settings/shipping"), auto: false,
-          desc: "O clone copiou tudo, mas vale abrir Settings → Shipping e Settings → Markets e bater o olho comparando com a origem.",
-        },
-        {
-          id: "teste", titulo: "Pedido de teste", url: `https://${sDe.domain || destination.shop}`, auto: false,
-          desc: "Abrir a loja, navegar como cliente e simular uma compra até o checkout pra garantir que está tudo funcionando.",
-        },
-      ];
-
-      const pendentes = items.filter(i => !i.auto).length;
-      log(`📋 Checklist gerado: ${pendentes} itens pendentes de ${items.length}`);
-      send("checklist", { items, destShop: destination.shop });
-    } catch (e) {
-      log(`⚠️ Não consegui gerar o checklist: ${e.message.slice(0, 80)}`);
-    }
-
     send("done", { msg: "🎉 Clonagem completa!" });
   } catch (err) {
     send("error", { msg: `💥 Erro fatal: ${err.message}` });
   }
-};
-
-// ============================================================
-//  SISTEMA DE JOBS — o clone roda em background no servidor.
-//  Se a internet do navegador cair, ele reconecta e recebe
-//  tudo que perdeu (os eventos ficam guardados na memória).
-// ============================================================
-const jobs = {};
-
-function criarJob() {
-  const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  jobs[id] = { events: [], finished: false, createdAt: Date.now() };
-  return id;
-}
-
-// Limpa jobs com mais de 2 horas (pra memória não crescer pra sempre)
-setInterval(() => {
-  const agora = Date.now();
-  for (const [id, j] of Object.entries(jobs)) {
-    if (agora - j.createdAt > 2 * 60 * 60 * 1000) delete jobs[id];
-  }
-}, 10 * 60 * 1000);
-
-// Inicia o clone: devolve o jobId na hora e roda o clone em background
-app.post("/api/clone-start", (req, res) => {
-  const jobId = criarJob();
-  const send = (type, data) => {
-    const j = jobs[jobId];
-    if (!j) return;
-    j.events.push({ type, ...data });
-    if (type === "done" || type === "error") j.finished = true;
-  };
-  res.json({ jobId });
-  runClone(req.body, send).catch((err) => send("error", { msg: `💥 ${err.message}` }));
-});
-
-// Stream de status: manda os eventos guardados + os novos, com keepalive
-app.get("/api/clone-status/:id", async (req, res) => {
-  const job = jobs[req.params.id];
-  if (!job) { res.status(404).json({ error: "Job não encontrado" }); return; }
-
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-
-  let i = 0;
-  let vivo = true;
-  req.on("close", () => { vivo = false; });
-  const keepalive = setInterval(() => { try { res.write(":keepalive\n\n"); } catch {} }, 15000);
-
-  while (vivo) {
-    while (i < job.events.length) {
-      res.write(`data: ${JSON.stringify(job.events[i++])}\n\n`);
-    }
-    if (job.finished && i >= job.events.length) break;
-    await sleep(400);
-  }
-  clearInterval(keepalive);
-  res.end();
-});
-
-// Rota antiga /api/clone (compatibilidade): stream direto na mesma conexão
-app.post("/api/clone", async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  const send = (type, data) => { try { res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`); } catch {} };
-  await runClone(req.body, send).catch((err) => send("error", { msg: `💥 ${err.message}` }));
   res.end();
 });
 
