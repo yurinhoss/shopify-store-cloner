@@ -411,11 +411,13 @@ const runClone = async (body, send) => {
     // ==== ARQUIVOS (banners, ícones) ====
     if (options.files) {
       log("━━━━━━━━━━ ETAPA 7: ARQUIVOS (banners, ícones) ━━━━━━━━━━");
+
+      // ── 7.1 Lista os arquivos da ORIGEM ──
       const arquivos = [];
       let cursor = null;
       while (true) {
         const after = cursor ? `, after: "${cursor}"` : "";
-        const q = `query { files(first: 50${after}) { edges { cursor node { ... on MediaImage { id alt image { url originalSrc } fileStatus } ... on GenericFile { id url alt fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
+        const q = `query { files(first: 100${after}) { edges { cursor node { ... on MediaImage { id alt image { url originalSrc } fileStatus } ... on GenericFile { id url alt fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
         const data = await gql(origin.shop, q, {}, tokenOrig);
         for (const e of data.files.edges) {
           const n = e.node;
@@ -428,70 +430,118 @@ const runClone = async (body, send) => {
         if (!data.files.pageInfo.hasNextPage) break;
         cursor = data.files.pageInfo.endCursor;
       }
-      log(`📁 ${arquivos.length} arquivos encontrados`);
+      log(`📁 ${arquivos.length} arquivos encontrados na origem`);
 
-      // ── FASE 1: Upload de todos os arquivos ──
-      // duplicateResolutionMode REPLACE garante que o arquivo mantém o MESMO nome
-      // na loja destino (sem sufixo aleatório). Isso é essencial porque o tema
-      // referencia banners por "shopify://shop_images/nome-do-arquivo.jpg" —
-      // se o nome mudar, o banner some.
-      let uploaded = 0;
-      for (let i = 0; i < arquivos.length; i++) {
-        const arq = arquivos[i];
-        progress("files", i + 1, arquivos.length);
-        try {
-          const b64 = await downloadBase64(arq.url);
+      // ── 7.2 REMOVE as fotos de produto da lista ──
+      // Pegadinha da Shopify: a API de "files" devolve TAMBÉM as fotos dos
+      // produtos, não só os banners da aba Conteúdo → Arquivos. Como as fotos
+      // de produto já sobem junto com os produtos na Etapa 1, subir aqui de
+      // novo = tudo duplicado. Então a gente lista as fotos de produto da
+      // origem e tira elas da lista.
+      const fotosProduto = new Set();
+      try {
+        const prods = await restPaginated(origin.shop, "/products.json?limit=250&fields=id,images", tokenOrig, "products");
+        for (const p of prods) {
+          for (const img of (p.images || [])) {
+            if (img.src) fotosProduto.add(img.src.split("?")[0].split("/").pop());
+          }
+        }
+      } catch (e) { log(`⚠️ Não consegui listar fotos de produto: ${e.message.slice(0,60)}`); }
+
+      const soArquivosReais = arquivos.filter(a => !fotosProduto.has(a.filename));
+      log(`🖼️ ${arquivos.length - soArquivosReais.length} fotos de produto ignoradas (já sobem na Etapa 1) → ${soArquivosReais.length} arquivos de verdade`);
+
+      // ── 7.3 PULA o que já existe no destino ──
+      // Se um clone anterior deu erro no meio, os arquivos que já subiram
+      // ficam salvos — então a gente lista o destino e só sobe o que falta.
+      const filenameMapDest = {}; // nome do arquivo → URL no destino
+      const lerArquivosDestino = async () => {
+        let c = null, total = 0;
+        while (true) {
+          const after = c ? `, after: "${c}"` : "";
+          const q = `query { files(first: 100${after}) { edges { cursor node { ... on MediaImage { image { url } fileStatus } ... on GenericFile { url fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
+          const d = await gql(destination.shop, q, {}, tokenDest);
+          for (const e of d.files.edges) {
+            const n = e.node;
+            const u = n?.image?.url || n?.url;
+            if (u && n.fileStatus === "READY") {
+              filenameMapDest[u.split("/").pop().split("?")[0]] = u;
+              total++;
+            }
+          }
+          if (!d.files.pageInfo.hasNextPage) break;
+          c = d.files.pageInfo.endCursor;
+        }
+        return total;
+      };
+      await lerArquivosDestino();
+
+      const paraSubir = soArquivosReais.filter(a => !filenameMapDest[a.filename]);
+      const jaExistem = soArquivosReais.length - paraSubir.length;
+      log(`⏭️ ${jaExistem} já existem no destino | ⬆️ ${paraSubir.length} a subir`);
+
+      // ── 7.4 SOBE EM LOTES DE 10 (muito mais rápido) ──
+      // Em vez de baixar cada foto pro servidor e re-enviar (lento), a gente
+      // manda a URL da CDN da origem e a PRÓPRIA SHOPIFY busca o arquivo.
+      // E em vez de 1 por vez, vão 10 numa chamada só.
+      let uploaded = 0, falhasUpload = 0;
+      for (let i = 0; i < paraSubir.length; i += 10) {
+        const lote = paraSubir.slice(i, i + 10);
+        progress("files", Math.min(i + 10, paraSubir.length), paraSubir.length);
+        const inputs = lote.map(arq => {
           const ext = arq.filename.split(".").pop().toLowerCase();
-          const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
           const isImage = ["png","gif","webp","svg","jpg","jpeg","avif","heic"].includes(ext);
-          const input = {
+          return {
             filename: arq.filename,
             alt: arq.alt,
             contentType: isImage ? "IMAGE" : "FILE",
             duplicateResolutionMode: "REPLACE",
-            originalSource: b64 ? `data:${mime};base64,${b64}` : arq.url,
+            originalSource: arq.url,
           };
+        });
+        try {
           const r = await gql(destination.shop,
             `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
-            { files: [input] }, tokenDest);
-          if ((r.fileCreate?.userErrors || []).length === 0) uploaded++;
-        } catch {}
-        await sleep(200);
-      }
-      log(`✅ Arquivos: ${uploaded}/${arquivos.length} enviados. Aguardando processamento...`);
-
-      // ── FASE 2: Espera a Shopify processar e busca as URLs REAIS no destino ──
-      // (Antes o código pegava a URL na hora do upload, mas ela vem vazia
-      //  enquanto a imagem ainda está processando — por isso os banners quebravam)
-      const filenameMapDest = {}; // nome do arquivo → URL nova no destino
-      for (let tentativa = 1; tentativa <= 6; tentativa++) {
-        await sleep(5000);
-        let cursorD = null, prontos = 0;
-        try {
-          while (true) {
-            const after = cursorD ? `, after: "${cursorD}"` : "";
-            const q = `query { files(first: 100${after}) { edges { cursor node { ... on MediaImage { image { url } fileStatus } ... on GenericFile { url fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
-            const d = await gql(destination.shop, q, {}, tokenDest);
-            for (const e of d.files.edges) {
-              const n = e.node;
-              const u = n?.image?.url || n?.url;
-              if (u && n.fileStatus === "READY") {
-                const fname = u.split("/").pop().split("?")[0];
-                filenameMapDest[fname] = u;
-                prontos++;
-              }
+            { files: inputs }, tokenDest);
+          const erros = r.fileCreate?.userErrors || [];
+          if (erros.length === 0) {
+            uploaded += lote.length;
+          } else {
+            // O lote falhou — tenta um por um com base64 (plano B, mais lento mas garantido)
+            for (const arq of lote) {
+              try {
+                const b64 = await downloadBase64(arq.url);
+                if (!b64) { falhasUpload++; continue; }
+                const ext = arq.filename.split(".").pop().toLowerCase();
+                const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
+                const r2 = await gql(destination.shop,
+                  `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
+                  { files: [{ filename: arq.filename, alt: arq.alt, contentType: "IMAGE", duplicateResolutionMode: "REPLACE", originalSource: `data:${mime};base64,${b64}` }] },
+                  tokenDest);
+                if ((r2.fileCreate?.userErrors || []).length === 0) uploaded++;
+                else falhasUpload++;
+              } catch { falhasUpload++; }
+              await sleep(150);
             }
-            if (!d.files.pageInfo.hasNextPage) break;
-            cursorD = d.files.pageInfo.endCursor;
           }
-        } catch {}
-        log(`⏳ Tentativa ${tentativa}/6 — ${prontos} arquivos prontos no destino`);
-        if (prontos >= arquivos.length) break;
+        } catch { falhasUpload += lote.length; }
+        await sleep(300);
+      }
+      log(`✅ Arquivos: ${uploaded} enviados | ${jaExistem} reaproveitados | ${falhasUpload} falhas`, "success");
+
+      // ── 7.5 Espera processar e monta o mapa de URLs (origem → destino) ──
+      if (paraSubir.length > 0) {
+        for (let tentativa = 1; tentativa <= 6; tentativa++) {
+          await sleep(5000);
+          const prontos = await lerArquivosDestino();
+          const faltam = soArquivosReais.filter(a => !filenameMapDest[a.filename]).length;
+          log(`⏳ Tentativa ${tentativa}/6 — ${prontos} prontos no destino | ${faltam} ainda processando`);
+          if (faltam === 0) break;
+        }
       }
 
-      // ── FASE 3: Monta o mapa URL origem → URL destino (casando pelo nome) ──
       const urlMap = {};
-      for (const arq of arquivos) {
+      for (const arq of soArquivosReais) {
         const destUrl = filenameMapDest[arq.filename];
         if (destUrl) urlMap[arq.url] = destUrl;
       }
