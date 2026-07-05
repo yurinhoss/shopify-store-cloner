@@ -292,12 +292,15 @@ const runClone = async (body, send) => {
       const existentesCust = await restPaginated(destination.shop, "/custom_collections.json?limit=250&fields=id,handle", tokenDest, "custom_collections");
       const handlesDestCust = new Map();
       existentesCust.forEach((c) => handlesDestCust.set(c.handle, c.id));
+      log(`📚 ${customCols.length} coleções na origem | ${existentesCust.length} já no destino`);
 
-      let criadosC = 0, puladosC = 0, totalCollects = 0;
+      let criadosC = 0, puladosC = 0, totalCollects = 0, errosC = 0;
       for (let i = 0; i < customCols.length; i++) {
         const c = customCols[i];
         progress("custom_collections", i + 1, customCols.length);
         let destColId;
+
+        // ── A coleção em si: cria só se não existir ──
         if (handlesDestCust.has(c.handle)) {
           destColId = handlesDestCust.get(c.handle);
           collectionIdMap[c.id] = destColId;
@@ -313,27 +316,52 @@ const runClone = async (body, send) => {
             destColId = data.custom_collection.id;
             collectionIdMap[c.id] = destColId;
             criadosC++;
-          } catch { continue; }
-        }
-        // Add collects in order
-        try {
-          const collects = await restPaginated(origin.shop, `/collects.json?collection_id=${c.id}&limit=250`, tokenOrig, "collects");
-          let pos = 1;
-          for (const col of collects) {
-            const newProdId = productIdMap[col.product_id];
-            if (!newProdId) continue;
-            try {
-              await restCall("POST", destination.shop, "/collects.json", tokenDest, {
-                collect: { collection_id: destColId, product_id: newProdId, position: pos++ },
-              });
-              totalCollects++;
-            } catch {}
-            await sleep(50);
+          } catch (e) {
+            errosC++;
+            log(`  ❌ Coleção "${c.title}": ${e.message.slice(0, 70)}`);
+            continue;
           }
-        } catch {}
+        }
+
+        // ── Os vínculos (collects): só adiciona os produtos que FALTAM ──
+        try {
+          // O que a coleção tem na origem
+          const collectsOrig = await restPaginated(origin.shop, `/collects.json?collection_id=${c.id}&limit=250`, tokenOrig, "collects");
+          // O que a coleção já tem no destino
+          const collectsDest = await restPaginated(destination.shop, `/collects.json?collection_id=${destColId}&limit=250&fields=product_id`, tokenDest, "collects");
+          const jaVinculados = new Set(collectsDest.map(cd => cd.product_id));
+
+          const faltando = collectsOrig
+            .map(col => productIdMap[col.product_id])
+            .filter(id => id && !jaVinculados.has(id));
+
+          if (faltando.length === 0) {
+            // Nada a fazer nessa coleção — segue pra próxima na hora
+            continue;
+          }
+          log(`  🔗 "${c.title}": ${jaVinculados.size} produtos já vinculados, adicionando ${faltando.length}...`);
+
+          // Sobe 5 vínculos em paralelo (bem mais rápido que 1 por vez)
+          for (let j = 0; j < faltando.length; j += 5) {
+            const lote = faltando.slice(j, j + 5);
+            const resultados = await Promise.allSettled(lote.map(prodId =>
+              restCall("POST", destination.shop, "/collects.json", tokenDest, {
+                collect: { collection_id: destColId, product_id: prodId },
+              })
+            ));
+            for (const r of resultados) {
+              if (r.status === "fulfilled") totalCollects++;
+              else if (!String(r.reason?.message || "").includes("already exists")) errosC++;
+            }
+            await sleep(200);
+          }
+        } catch (e) {
+          errosC++;
+          log(`  ⚠️ Vínculos de "${c.title}": ${e.message.slice(0, 70)}`);
+        }
         await sleep(80);
       }
-      log(`✅ Custom collections: ${criadosC} criadas | ${puladosC} existiam | ${totalCollects} collects`, "success");
+      log(`✅ Custom collections: ${criadosC} criadas | ${puladosC} existiam | ${totalCollects} produtos vinculados | ${errosC} erros`, "success");
     }
 
     // ==== PÁGINAS ====
@@ -1240,6 +1268,197 @@ app.get("/api/clone-status/:id", async (req, res) => {
   }
   clearInterval(keepalive);
   res.end();
+});
+
+// ============================================================
+//  RESET DE ETAPAS — apaga dados da loja DESTINO para poder
+//  clonar de novo do zero (ex: moeda errada → apagar markets
+//  e fretes e recriar). Usa o mesmo sistema de jobs do clone.
+// ============================================================
+const runReset = async (body, send) => {
+  const { destination, etapas } = body;
+  const log = (msg, status = "info") => send("log", { msg, status });
+  const progress = (step, current, total) => send("progress", { step, current, total });
+
+  try {
+    log("🔑 Autenticando na loja destino...");
+    const tokenDest = await getToken(destination.shop, destination.clientId, destination.clientSecret);
+    log(`✅ Autenticado em ${destination.shop}`, "success");
+
+    // ── MARKETS: apaga todos, menos o principal (a Shopify não deixa) ──
+    if (etapas.markets) {
+      log("━━━━━━━━━━ RESET: MARKETS ━━━━━━━━━━");
+      const d = await gql(destination.shop, `query { markets(first: 100) { edges { node { id name primary } } } }`, {}, tokenDest);
+      const todos = d.markets.edges.map(e => e.node);
+      const apagar = todos.filter(m => !m.primary);
+      log(`🌍 ${todos.length} markets | ${apagar.length} serão apagados (o principal fica)`);
+      let ok = 0, erros = 0;
+      for (let i = 0; i < apagar.length; i++) {
+        progress("reset_markets", i + 1, apagar.length);
+        try {
+          const r = await gql(destination.shop,
+            `mutation($id:ID!){marketDelete(id:$id){deletedId userErrors{message}}}`,
+            { id: apagar[i].id }, tokenDest);
+          if ((r.marketDelete?.userErrors || []).length > 0) {
+            erros++;
+            log(`  ⚠️ ${apagar[i].name}: ${r.marketDelete.userErrors[0].message.slice(0, 70)}`);
+          } else ok++;
+        } catch (e) { erros++; log(`  ❌ ${apagar[i].name}: ${e.message.slice(0, 70)}`); }
+        await sleep(150);
+      }
+      log(`✅ Markets: ${ok} apagados | ${erros} erros`, "success");
+    }
+
+    // ── FRETES: apaga as zonas que o clonador criou (nome = código do país) ──
+    if (etapas.fretes) {
+      log("━━━━━━━━━━ RESET: FRETES ━━━━━━━━━━");
+      const profData = await gql(destination.shop, `
+        query { deliveryProfiles(first: 10) { edges { node { id default
+          profileLocationGroups { locationGroup { id }
+            locationGroupZones(first: 100) { edges { node { zone { id name } } } } } } } } }`, {}, tokenDest);
+      const profile = profData.deliveryProfiles.edges.map(e => e.node).find(p => p.default);
+      if (!profile) { log("❌ Perfil de entrega padrão não encontrado", "error"); }
+      else {
+        const zonas = [];
+        for (const lg of profile.profileLocationGroups)
+          for (const ze of lg.locationGroupZones.edges)
+            zonas.push(ze.node.zone);
+        // Só apaga zonas com nome de 2 letras (DE, FR, IT...) — foi o clonador
+        // que criou essas. Zonas com outros nomes (ex: "Brasil Grátis") ficam.
+        const apagar = zonas.filter(z => /^[A-Z]{2}$/.test(z.name));
+        const mantidas = zonas.length - apagar.length;
+        log(`🚚 ${zonas.length} zonas | ${apagar.length} serão apagadas | ${mantidas} mantidas (nome personalizado)`);
+        let ok = 0, erros = 0;
+        for (let i = 0; i < apagar.length; i += 20) {
+          const lote = apagar.slice(i, i + 20);
+          progress("reset_fretes", Math.min(i + 20, apagar.length), apagar.length);
+          try {
+            const r = await gql(destination.shop,
+              `mutation($id:ID!,$profile:DeliveryProfileInput!){deliveryProfileUpdate(id:$id,profile:$profile){profile{id}userErrors{field message}}}`,
+              { id: profile.id, profile: { zonesToDelete: lote.map(z => z.id) } }, tokenDest);
+            if ((r.deliveryProfileUpdate?.userErrors || []).length > 0) {
+              erros += lote.length;
+              log(`  ⚠️ ${r.deliveryProfileUpdate.userErrors[0].message.slice(0, 80)}`);
+            } else ok += lote.length;
+          } catch (e) { erros += lote.length; log(`  ❌ ${e.message.slice(0, 80)}`); }
+          await sleep(300);
+        }
+        log(`✅ Fretes: ${ok} zonas apagadas | ${erros} erros`, "success");
+      }
+    }
+
+    // ── COLEÇÕES: apaga smart + custom ──
+    if (etapas.colecoes) {
+      log("━━━━━━━━━━ RESET: COLEÇÕES ━━━━━━━━━━");
+      const smart = await restPaginated(destination.shop, "/smart_collections.json?limit=250&fields=id,title", tokenDest, "smart_collections");
+      const custom = await restPaginated(destination.shop, "/custom_collections.json?limit=250&fields=id,title", tokenDest, "custom_collections");
+      log(`📚 ${smart.length} smart + ${custom.length} custom a apagar`);
+      let ok = 0, erros = 0;
+      const apagarLista = [
+        ...smart.map(c => ({ id: c.id, tipo: "smart_collections" })),
+        ...custom.map(c => ({ id: c.id, tipo: "custom_collections" })),
+      ];
+      for (let i = 0; i < apagarLista.length; i += 5) {
+        const lote = apagarLista.slice(i, i + 5);
+        progress("reset_colecoes", Math.min(i + 5, apagarLista.length), apagarLista.length);
+        const rs = await Promise.allSettled(lote.map(c =>
+          restCall("DELETE", destination.shop, `/${c.tipo}/${c.id}.json`, tokenDest)));
+        for (const r of rs) r.status === "fulfilled" ? ok++ : erros++;
+        await sleep(250);
+      }
+      log(`✅ Coleções: ${ok} apagadas | ${erros} erros`, "success");
+    }
+
+    // ── PÁGINAS ──
+    if (etapas.paginas) {
+      log("━━━━━━━━━━ RESET: PÁGINAS ━━━━━━━━━━");
+      const pgs = await restPaginated(destination.shop, "/pages.json?limit=250&fields=id,title", tokenDest, "pages");
+      log(`📄 ${pgs.length} páginas a apagar`);
+      let ok = 0, erros = 0;
+      for (let i = 0; i < pgs.length; i += 5) {
+        const lote = pgs.slice(i, i + 5);
+        progress("reset_paginas", Math.min(i + 5, pgs.length), pgs.length);
+        const rs = await Promise.allSettled(lote.map(p =>
+          restCall("DELETE", destination.shop, `/pages/${p.id}.json`, tokenDest)));
+        for (const r of rs) r.status === "fulfilled" ? ok++ : erros++;
+        await sleep(250);
+      }
+      log(`✅ Páginas: ${ok} apagadas | ${erros} erros`, "success");
+    }
+
+    // ── MENUS: apaga os que a Shopify deixa (os padrão do sistema ficam) ──
+    if (etapas.menus) {
+      log("━━━━━━━━━━ RESET: MENUS ━━━━━━━━━━");
+      try {
+        const d = await gql(destination.shop, `query { menus(first: 50) { edges { node { id title isDefault } } } }`, {}, tokenDest);
+        const menus = d.menus.edges.map(e => e.node);
+        const apagar = menus.filter(m => !m.isDefault);
+        log(`📑 ${menus.length} menus | ${apagar.length} podem ser apagados`);
+        let ok = 0, erros = 0;
+        for (const m of apagar) {
+          try {
+            const r = await gql(destination.shop,
+              `mutation($id:ID!){menuDelete(id:$id){deletedMenuId userErrors{message}}}`,
+              { id: m.id }, tokenDest);
+            if ((r.menuDelete?.userErrors || []).length > 0) { erros++; }
+            else ok++;
+          } catch { erros++; }
+          await sleep(150);
+        }
+        log(`✅ Menus: ${ok} apagados | ${erros} erros`, "success");
+      } catch (e) { log(`⚠️ Menus: ${e.message.slice(0, 80)}`); }
+    }
+
+    // ── DESCONTOS ──
+    if (etapas.descontos) {
+      log("━━━━━━━━━━ RESET: DESCONTOS ━━━━━━━━━━");
+      const prs = await restPaginated(destination.shop, "/price_rules.json?limit=250", tokenDest, "price_rules");
+      log(`🎟️ ${prs.length} descontos a apagar`);
+      let ok = 0, erros = 0;
+      for (let i = 0; i < prs.length; i++) {
+        progress("reset_descontos", i + 1, prs.length);
+        try { await restCall("DELETE", destination.shop, `/price_rules/${prs[i].id}.json`, tokenDest); ok++; }
+        catch { erros++; }
+        await sleep(150);
+      }
+      log(`✅ Descontos: ${ok} apagados | ${erros} erros`, "success");
+    }
+
+    // ── PRODUTOS (⚠️ apaga TUDO) ──
+    if (etapas.produtos) {
+      log("━━━━━━━━━━ RESET: PRODUTOS ⚠️ ━━━━━━━━━━");
+      const prods = await restPaginated(destination.shop, "/products.json?limit=250&fields=id", tokenDest, "products");
+      log(`📦 ${prods.length} produtos a apagar — isso pode demorar alguns minutos`);
+      let ok = 0, erros = 0;
+      for (let i = 0; i < prods.length; i += 5) {
+        const lote = prods.slice(i, i + 5);
+        progress("reset_produtos", Math.min(i + 5, prods.length), prods.length);
+        const rs = await Promise.allSettled(lote.map(p =>
+          restCall("DELETE", destination.shop, `/products/${p.id}.json`, tokenDest)));
+        for (const r of rs) r.status === "fulfilled" ? ok++ : erros++;
+        if (i % 100 === 0 && i > 0) log(`  🗑️ ${ok} apagados até agora...`);
+        await sleep(300);
+      }
+      log(`✅ Produtos: ${ok} apagados | ${erros} erros`, "success");
+    }
+
+    send("done", { msg: "🗑️ Reset concluído! Agora pode clonar de novo essas etapas." });
+  } catch (err) {
+    send("error", { msg: `💥 Erro fatal no reset: ${err.message}` });
+  }
+};
+
+// Inicia o reset (mesmo esquema de jobs do clone)
+app.post("/api/reset-start", (req, res) => {
+  const jobId = criarJob();
+  const send = (type, data) => {
+    const j = jobs[jobId];
+    if (!j) return;
+    j.events.push({ type, ...data });
+    if (type === "done" || type === "error") j.finished = true;
+  };
+  res.json({ jobId });
+  runReset(req.body, send).catch((err) => send("error", { msg: `💥 ${err.message}` }));
 });
 
 // Rota antiga /api/clone (compatibilidade): stream direto na mesma conexão

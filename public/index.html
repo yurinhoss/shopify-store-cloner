@@ -86,6 +86,9 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 .log-line { white-space: pre-wrap; word-break: break-all; color: var(--text2); }
 .log-line.success { color: var(--green); }
 .log-line.error { color: var(--red); }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-danger:hover { opacity: .88; }
+.reset-warn { background: #fff3f3; border: 1px solid #ffcdd2; border-radius: 10px; padding: 12px 16px; font-size: 12.5px; color: #b71c1c; line-height: 1.6; margin-bottom: 16px; }
 .done-banner { display: none; text-align: center; padding: 20px; background: var(--green-bg); border: 1px solid #b2dfdb; border-radius: 11px; margin-top: 14px; }
 .done-banner.active { display: block; }
 .done-banner h3 { color: var(--green); font-size: 16px; margin-bottom: 4px; }
@@ -150,6 +153,7 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
     <button class="tab-btn active" onclick="switchTab('clone')">🔄 Clone Store</button>
     <button class="tab-btn" onclick="switchTab('reviews')">⭐ Reviews Generator</button>
     <button class="tab-btn" onclick="switchTab('scopes')">🔑 API Scopes</button>
+    <button class="tab-btn" onclick="switchTab('reset')">🗑️ Resetar</button>
   </div>
 </div>
 
@@ -314,9 +318,37 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 
 </div>
 
+  <!-- TAB RESET -->
+  <div id="tab-reset" style="display:none">
+    <div class="card">
+      <div class="card-header"><h3>🗑️ Resetar etapas da loja DESTINO</h3><p>Apaga o que foi clonado errado para poder clonar de novo do zero (ex: moeda errada)</p></div>
+      <div class="card-body">
+        <div class="reset-warn">
+          ⚠️ <b>Atenção:</b> isso apaga de verdade, direto na Shopify, e não tem "desfazer".
+          Usa as credenciais da <b>Destination Store</b> preenchidas na aba Clone Store.
+          O market principal, zonas de frete com nome personalizado e menus padrão do sistema são preservados.
+        </div>
+        <div class="checkbox-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:16px">
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-markets"> 🌍 Markets (menos o principal)</label>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-fretes"> 🚚 Fretes (zonas criadas pelo clone)</label>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-colecoes"> 📚 Coleções (smart + custom)</label>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-paginas"> 📄 Páginas</label>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-menus"> 📑 Menus</label>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-descontos"> 🎟️ Descontos</label>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer;color:var(--red)"><input type="checkbox" id="rst-produtos"> ⚠️ Produtos (apaga TODOS)</label>
+        </div>
+        <button class="btn btn-danger" id="btn-reset" onclick="startReset()">🗑️ Apagar selecionados da loja destino</button>
+        <div class="log-area" id="reset-log-area" style="margin-top:14px"></div>
+      </div>
+    </div>
+  </div>
+
+
+
 <script>
 function switchTab(tab) {
-  const map={clone:0,reviews:1,scopes:2};
+  if (document.getElementById('tab-reset')) document.getElementById('tab-reset').style.display = tab==='reset'?'block':'none';
+  const map={clone:0,reviews:1,scopes:2,reset:3};
   document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active',i===map[tab]));
   document.getElementById('tab-clone').style.display = tab==='clone'?'block':'none';
   document.getElementById('tab-reviews').style.display = tab==='reviews'?'block':'none';
@@ -457,6 +489,69 @@ function renderChecklist(data) {
   }
   atualizaContador();
   wrap.classList.add('active');
+}
+
+// ============================================================
+//  RESET DE ETAPAS — apaga da loja destino pra reclonar do zero
+// ============================================================
+async function startReset() {
+  const destination = getStoreData('dest');
+  if (!destination.shop || !destination.clientId || !destination.clientSecret) {
+    alert('Preenche as credenciais da Destination Store na aba Clone Store primeiro!');
+    switchTab('clone');
+    return;
+  }
+
+  const etapas = {
+    markets: document.getElementById('rst-markets').checked,
+    fretes: document.getElementById('rst-fretes').checked,
+    colecoes: document.getElementById('rst-colecoes').checked,
+    paginas: document.getElementById('rst-paginas').checked,
+    menus: document.getElementById('rst-menus').checked,
+    descontos: document.getElementById('rst-descontos').checked,
+    produtos: document.getElementById('rst-produtos').checked,
+  };
+  const nomes = { markets:'Markets', fretes:'Fretes', colecoes:'Coleções', paginas:'Páginas', menus:'Menus', descontos:'Descontos', produtos:'⚠️ TODOS OS PRODUTOS' };
+  const escolhidas = Object.keys(etapas).filter(k => etapas[k]).map(k => nomes[k]);
+  if (escolhidas.length === 0) { alert('Marca pelo menos uma etapa pra apagar.'); return; }
+
+  // Confirmação — e dupla se produtos estiver marcado
+  if (!confirm('Vai APAGAR da loja ' + destination.shop + ':\\n\\n• ' + escolhidas.join('\\n• ') + '\\n\\nIsso não tem desfazer. Continuar?')) return;
+  if (etapas.produtos) {
+    const digitado = prompt('Pra confirmar que quer apagar TODOS os produtos, digita o nome da loja:\\n' + destination.shop);
+    if (digitado !== destination.shop) { alert('Nome não confere — reset cancelado.'); return; }
+  }
+
+  const logArea = document.getElementById('reset-log-area');
+  logArea.innerHTML = '';
+  document.getElementById('btn-reset').disabled = true;
+
+  try {
+    const startRes = await fetch('/api/reset-start', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ destination, etapas }) });
+    const { jobId } = await startRes.json();
+
+    const res = await fetch('/api/clone-status/' + jobId);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done: fim, value } = await reader.read();
+      if (fim) break;
+      buffer += decoder.decode(value, { stream: true });
+      const linhas = buffer.split('\\n\\n');
+      buffer = linhas.pop();
+      for (const linha of linhas) {
+        if (!linha.startsWith('data: ')) continue;
+        let data; try { data = JSON.parse(linha.slice(6)); } catch { continue; }
+        if (data.type === 'log') { const d=document.createElement('div'); d.className='log-line '+(data.status||'info'); d.textContent=data.msg; logArea.appendChild(d); logArea.scrollTop=logArea.scrollHeight; }
+        if (data.type === 'done') { const d=document.createElement('div'); d.className='log-line success'; d.textContent=data.msg; logArea.appendChild(d); }
+        if (data.type === 'error') { const d=document.createElement('div'); d.className='log-line error'; d.textContent=data.msg; logArea.appendChild(d); }
+      }
+    }
+  } catch (err) {
+    const d=document.createElement('div'); d.className='log-line error'; d.textContent='💥 '+err.message; logArea.appendChild(d);
+  }
+  document.getElementById('btn-reset').disabled = false;
 }
 
 async function startReviews() {
