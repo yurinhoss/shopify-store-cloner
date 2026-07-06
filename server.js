@@ -1430,6 +1430,60 @@ const runReset = async (body, send) => {
       log(`✅ Descontos: ${ok} apagados | ${erros} erros`, "success");
     }
 
+    // ── ARQUIVOS: apaga fotos/vídeos soltos, PROTEGENDO as fotos dos produtos ──
+    if (etapas.arquivos) {
+      log("━━━━━━━━━━ RESET: ARQUIVOS ━━━━━━━━━━");
+
+      // 1. Lista as fotos que os produtos USAM — essas são intocáveis.
+      //    (senão a loja ficaria com todos os produtos sem imagem)
+      const protegidos = new Set();
+      try {
+        const prods = await restPaginated(destination.shop, "/products.json?limit=250&fields=id,images", tokenDest, "products");
+        for (const p of prods)
+          for (const img of (p.images || []))
+            if (img.src) protegidos.add(img.src.split("?")[0].split("/").pop());
+        log(`🛡️ ${protegidos.size} fotos de produto protegidas (não serão apagadas)`);
+      } catch (e) { log(`⚠️ Não consegui listar fotos de produto: ${e.message.slice(0, 60)}`); }
+
+      // 2. Lista todos os arquivos da loja e separa o que pode apagar
+      const apagarIds = [];
+      let puladosProt = 0, cursor = null;
+      while (true) {
+        const after = cursor ? `, after: "${cursor}"` : "";
+        const q = `query { files(first: 100${after}) { edges { cursor node { ... on MediaImage { id image { url } } ... on GenericFile { id url } ... on Video { id } } } pageInfo { hasNextPage endCursor } } }`;
+        const d = await gql(destination.shop, q, {}, tokenDest);
+        for (const e of d.files.edges) {
+          const n = e.node;
+          if (!n.id) continue;
+          const u = n?.image?.url || n?.url;
+          const fname = u ? u.split("/").pop().split("?")[0] : null;
+          if (fname && protegidos.has(fname)) { puladosProt++; continue; }
+          apagarIds.push(n.id);
+        }
+        if (!d.files.pageInfo.hasNextPage) break;
+        cursor = d.files.pageInfo.endCursor;
+      }
+      log(`🖼️ ${apagarIds.length} arquivos a apagar | ${puladosProt} protegidos (em uso por produtos)`);
+
+      // 3. Apaga em lotes de 50
+      let ok = 0, erros = 0;
+      for (let i = 0; i < apagarIds.length; i += 50) {
+        const lote = apagarIds.slice(i, i + 50);
+        progress("reset_arquivos", Math.min(i + 50, apagarIds.length), apagarIds.length);
+        try {
+          const r = await gql(destination.shop,
+            `mutation($ids:[ID!]!){fileDelete(fileIds:$ids){deletedFileIds userErrors{message}}}`,
+            { ids: lote }, tokenDest);
+          const deletados = (r.fileDelete?.deletedFileIds || []).length;
+          ok += deletados;
+          const ue = r.fileDelete?.userErrors || [];
+          if (ue.length > 0) { erros += lote.length - deletados; log(`  ⚠️ ${ue[0].message.slice(0, 70)}`); }
+        } catch (e) { erros += lote.length; log(`  ❌ ${e.message.slice(0, 70)}`); }
+        await sleep(400);
+      }
+      log(`✅ Arquivos: ${ok} apagados | ${puladosProt} protegidos | ${erros} erros`, "success");
+    }
+
     // ── PRODUTOS (⚠️ apaga TUDO) ──
     if (etapas.produtos) {
       log("━━━━━━━━━━ RESET: PRODUTOS ⚠️ ━━━━━━━━━━");

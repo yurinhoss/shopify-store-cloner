@@ -89,6 +89,15 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 .btn-danger { background: var(--red); color: #fff; }
 .btn-danger:hover { opacity: .88; }
 .reset-warn { background: #fff3f3; border: 1px solid #ffcdd2; border-radius: 10px; padding: 12px 16px; font-size: 12.5px; color: #b71c1c; line-height: 1.6; margin-bottom: 16px; }
+.rst-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.rst-opt { display: flex; gap: 10px; align-items: flex-start; border: 1.5px solid var(--border); border-radius: 10px; padding: 12px 14px; cursor: pointer; transition: all .15s; background: var(--card); }
+.rst-opt:hover { border-color: var(--red); }
+.rst-opt input { width: 17px; height: 17px; min-width: 17px; margin-top: 1px; accent-color: var(--red); cursor: pointer; }
+.rst-opt .rst-t { font-size: 13px; font-weight: 600; color: var(--text); }
+.rst-opt .rst-d { font-size: 11.5px; color: var(--text3); margin-top: 3px; line-height: 1.45; }
+.rst-opt.marcado { border-color: var(--red); background: #fff8f8; }
+.rst-opt.perigo .rst-t { color: var(--red); }
+.rst-opt.perigo.marcado { background: #ffefef; }
 .done-banner { display: none; text-align: center; padding: 20px; background: var(--green-bg); border: 1px solid #b2dfdb; border-radius: 11px; margin-top: 14px; }
 .done-banner.active { display: block; }
 .done-banner h3 { color: var(--green); font-size: 16px; margin-bottom: 4px; }
@@ -328,14 +337,15 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
           Usa as credenciais da <b>Destination Store</b> preenchidas na aba Clone Store.
           O market principal, zonas de frete com nome personalizado e menus padrão do sistema são preservados.
         </div>
-        <div class="checkbox-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:16px">
-          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-markets"> 🌍 Markets (menos o principal)</label>
-          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-fretes"> 🚚 Fretes (zonas criadas pelo clone)</label>
-          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-colecoes"> 📚 Coleções (smart + custom)</label>
-          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-paginas"> 📄 Páginas</label>
-          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-menus"> 📑 Menus</label>
-          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer"><input type="checkbox" id="rst-descontos"> 🎟️ Descontos</label>
-          <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer;color:var(--red)"><input type="checkbox" id="rst-produtos"> ⚠️ Produtos (apaga TODOS)</label>
+        <div class="rst-grid">
+          <label class="rst-opt"><input type="checkbox" id="rst-markets"><div><div class="rst-t">🌍 Markets</div><div class="rst-d">Apaga todos os mercados. O principal fica (a Shopify não deixa apagar).</div></div></label>
+          <label class="rst-opt"><input type="checkbox" id="rst-fretes"><div><div class="rst-t">🚚 Fretes</div><div class="rst-d">Apaga as zonas criadas pelo clone (nome de 2 letras). Zonas com nome personalizado ficam.</div></div></label>
+          <label class="rst-opt"><input type="checkbox" id="rst-arquivos"><div><div class="rst-t">🖼️ Arquivos</div><div class="rst-d">Apaga fotos e vídeos soltos (duplicatas, banners). Fotos em uso pelos produtos são protegidas.</div></div></label>
+          <label class="rst-opt"><input type="checkbox" id="rst-colecoes"><div><div class="rst-t">📚 Coleções</div><div class="rst-d">Apaga todas as coleções, automáticas (smart) e manuais (custom).</div></div></label>
+          <label class="rst-opt"><input type="checkbox" id="rst-paginas"><div><div class="rst-t">📄 Páginas</div><div class="rst-d">Apaga todas as páginas (sobre, contato, rastreamento, etc).</div></div></label>
+          <label class="rst-opt"><input type="checkbox" id="rst-menus"><div><div class="rst-t">📑 Menus</div><div class="rst-d">Apaga os menus de navegação. Os padrão do sistema ficam.</div></div></label>
+          <label class="rst-opt"><input type="checkbox" id="rst-descontos"><div><div class="rst-t">🎟️ Descontos</div><div class="rst-d">Apaga todos os cupons e regras de desconto.</div></div></label>
+          <label class="rst-opt perigo"><input type="checkbox" id="rst-produtos"><div><div class="rst-t">⚠️ Produtos</div><div class="rst-d">Apaga TODOS os produtos da loja. Pede confirmação extra digitando o nome da loja.</div></div></label>
         </div>
         <button class="btn btn-danger" id="btn-reset" onclick="startReset()">🗑️ Apagar selecionados da loja destino</button>
         <div class="log-area" id="reset-log-area" style="margin-top:14px"></div>
@@ -494,6 +504,10 @@ function renderChecklist(data) {
 // ============================================================
 //  RESET DE ETAPAS — apaga da loja destino pra reclonar do zero
 // ============================================================
+document.addEventListener('change', function(e) {
+  if (e.target.matches('.rst-opt input')) e.target.closest('.rst-opt').classList.toggle('marcado', e.target.checked);
+});
+
 async function startReset() {
   const destination = getStoreData('dest');
   if (!destination.shop || !destination.clientId || !destination.clientSecret) {
@@ -505,20 +519,21 @@ async function startReset() {
   const etapas = {
     markets: document.getElementById('rst-markets').checked,
     fretes: document.getElementById('rst-fretes').checked,
+    arquivos: document.getElementById('rst-arquivos').checked,
     colecoes: document.getElementById('rst-colecoes').checked,
     paginas: document.getElementById('rst-paginas').checked,
     menus: document.getElementById('rst-menus').checked,
     descontos: document.getElementById('rst-descontos').checked,
     produtos: document.getElementById('rst-produtos').checked,
   };
-  const nomes = { markets:'Markets', fretes:'Fretes', colecoes:'Coleções', paginas:'Páginas', menus:'Menus', descontos:'Descontos', produtos:'⚠️ TODOS OS PRODUTOS' };
+  const nomes = { markets:'Markets', fretes:'Fretes', arquivos:'Arquivos (fotos/vídeos soltos)', colecoes:'Coleções', paginas:'Páginas', menus:'Menus', descontos:'Descontos', produtos:'⚠️ TODOS OS PRODUTOS' };
   const escolhidas = Object.keys(etapas).filter(k => etapas[k]).map(k => nomes[k]);
   if (escolhidas.length === 0) { alert('Marca pelo menos uma etapa pra apagar.'); return; }
 
   // Confirmação — e dupla se produtos estiver marcado
-  if (!confirm('Vai APAGAR da loja ' + destination.shop + ':\\n\\n• ' + escolhidas.join('\\n• ') + '\\n\\nIsso não tem desfazer. Continuar?')) return;
+  if (!confirm('Vai APAGAR da loja ' + destination.shop + ':\n\n• ' + escolhidas.join('\n• ') + '\n\nIsso não tem desfazer. Continuar?')) return;
   if (etapas.produtos) {
-    const digitado = prompt('Pra confirmar que quer apagar TODOS os produtos, digita o nome da loja:\\n' + destination.shop);
+    const digitado = prompt('Pra confirmar que quer apagar TODOS os produtos, digita o nome da loja:\n' + destination.shop);
     if (digitado !== destination.shop) { alert('Nome não confere — reset cancelado.'); return; }
   }
 
@@ -538,7 +553,7 @@ async function startReset() {
       const { done: fim, value } = await reader.read();
       if (fim) break;
       buffer += decoder.decode(value, { stream: true });
-      const linhas = buffer.split('\\n\\n');
+      const linhas = buffer.split('\n\n');
       buffer = linhas.pop();
       for (const linha of linhas) {
         if (!linha.startsWith('data: ')) continue;
