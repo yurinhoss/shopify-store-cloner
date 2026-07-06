@@ -265,24 +265,30 @@ const runClone = async (body, send) => {
       existentes.forEach((c) => handlesDest.set(c.handle, c.id));
 
       let criados = 0, pulados = 0;
-      for (let i = 0; i < cols.length; i++) {
-        const c = cols[i];
-        progress("smart_collections", i + 1, cols.length);
+      // Separa: as que já existem só entram no mapa; as novas vão em lotes de 5
+      const novasSmart = [];
+      for (const c of cols) {
         if (handlesDest.has(c.handle)) {
           collectionIdMap[c.id] = handlesDest.get(c.handle);
-          pulados++; continue;
-        }
-        try {
-          const body = { smart_collection: { title: c.title, handle: c.handle, body_html: replaceContent(c.body_html), rules: c.rules, disjunctive: c.disjunctive, sort_order: c.sort_order, published: true } };
-          if (c.image?.src) {
-            const b64 = await downloadBase64(c.image.src);
-            body.smart_collection.image = b64 ? { attachment: b64 } : { src: c.image.src };
-          }
-          const data = await restCall("POST", destination.shop, "/smart_collections.json", tokenDest, body);
-          collectionIdMap[c.id] = data.smart_collection.id;
-          criados++;
-        } catch {}
-        await sleep(100);
+          pulados++;
+        } else novasSmart.push(c);
+      }
+      for (let i = 0; i < novasSmart.length; i += 5) {
+        const chunk = novasSmart.slice(i, i + 5);
+        progress("smart_collections", Math.min(i + 5, novasSmart.length), novasSmart.length);
+        await Promise.allSettled(chunk.map(async (c) => {
+          try {
+            const body = { smart_collection: { title: c.title, handle: c.handle, body_html: replaceContent(c.body_html), rules: c.rules, disjunctive: c.disjunctive, sort_order: c.sort_order, published: true } };
+            if (c.image?.src) {
+              const b64 = await downloadBase64(c.image.src);
+              body.smart_collection.image = b64 ? { attachment: b64 } : { src: c.image.src };
+            }
+            const data = await restCall("POST", destination.shop, "/smart_collections.json", tokenDest, body);
+            collectionIdMap[c.id] = data.smart_collection.id;
+            criados++;
+          } catch {}
+        }));
+        await sleep(150);
       }
       log(`✅ Smart collections: ${criados} criadas | ${pulados} já existiam`, "success");
 
@@ -341,18 +347,18 @@ const runClone = async (body, send) => {
           }
           log(`  🔗 "${c.title}": ${jaVinculados.size} produtos já vinculados, adicionando ${faltando.length}...`);
 
-          // Sobe 5 vínculos em paralelo (bem mais rápido que 1 por vez)
-          for (let j = 0; j < faltando.length; j += 5) {
-            const lote = faltando.slice(j, j + 5);
-            const resultados = await Promise.allSettled(lote.map(prodId =>
-              restCall("POST", destination.shop, "/collects.json", tokenDest, {
-                collect: { collection_id: destColId, product_id: prodId },
-              })
-            ));
-            for (const r of resultados) {
-              if (r.status === "fulfilled") totalCollects++;
-              else if (!String(r.reason?.message || "").includes("already exists")) errosC++;
-            }
+          // GraphQL aceita até 250 produtos POR CHAMADA (antes: 1 por chamada!)
+          for (let j = 0; j < faltando.length; j += 250) {
+            const lote = faltando.slice(j, j + 250);
+            try {
+              const r = await gql(destination.shop,
+                `mutation($id:ID!,$pids:[ID!]!){collectionAddProductsV2(id:$id,productIds:$pids){job{id}userErrors{field message}}}`,
+                { id: `gid://shopify/Collection/${destColId}`, pids: lote.map(id => `gid://shopify/Product/${id}`) },
+                tokenDest);
+              const ue = r.collectionAddProductsV2?.userErrors || [];
+              if (ue.length > 0) { errosC++; log(`  ⚠️ "${c.title}": ${ue[0].message.slice(0, 60)}`); }
+              else totalCollects += lote.length;
+            } catch (e) { errosC++; log(`  ⚠️ "${c.title}": ${e.message.slice(0, 60)}`); }
             await sleep(200);
           }
         } catch (e) {
@@ -513,47 +519,62 @@ const runClone = async (body, send) => {
       // manda a URL da CDN da origem e a PRÓPRIA SHOPIFY busca o arquivo.
       // E em vez de 1 por vez, vão 10 numa chamada só.
       let uploaded = 0, falhasUpload = 0;
-      for (let i = 0; i < paraSubir.length; i += 10) {
-        const lote = paraSubir.slice(i, i + 10);
-        progress("files", Math.min(i + 10, paraSubir.length), paraSubir.length);
-        const inputs = lote.map(arq => {
-          const ext = arq.filename.split(".").pop().toLowerCase();
-          const isImage = ["png","gif","webp","svg","jpg","jpeg","avif","heic"].includes(ext);
-          return {
-            filename: arq.filename,
-            alt: arq.alt,
-            contentType: isImage ? "IMAGE" : "FILE",
-            duplicateResolutionMode: "REPLACE",
-            originalSource: arq.url,
-          };
-        });
-        try {
-          const r = await gql(destination.shop,
-            `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
-            { files: inputs }, tokenDest);
-          const erros = r.fileCreate?.userErrors || [];
-          if (erros.length === 0) {
-            uploaded += lote.length;
+      const TAM_UP = 50, PAR_UP = 3; // 3 chamadas de 50 = 150 arquivos por rodada
+      const montarInput = (arq) => {
+        const ext = arq.filename.split(".").pop().toLowerCase();
+        const isImage = ["png","gif","webp","svg","jpg","jpeg","avif","heic"].includes(ext);
+        return {
+          filename: arq.filename,
+          alt: arq.alt,
+          contentType: isImage ? "IMAGE" : "FILE",
+          duplicateResolutionMode: "REPLACE",
+          originalSource: arq.url,
+        };
+      };
+      // Plano B pra quando um lote falha: tenta cada arquivo sozinho, em base64
+      const subirUmPorUm = async (lote) => {
+        for (const arq of lote) {
+          try {
+            const b64 = await downloadBase64(arq.url);
+            if (!b64) { falhasUpload++; continue; }
+            const ext = arq.filename.split(".").pop().toLowerCase();
+            const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
+            const r2 = await gql(destination.shop,
+              `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
+              { files: [{ ...montarInput(arq), originalSource: `data:${mime};base64,${b64}` }] },
+              tokenDest);
+            if ((r2.fileCreate?.userErrors || []).length === 0) uploaded++;
+            else falhasUpload++;
+          } catch { falhasUpload++; }
+          await sleep(150);
+        }
+      };
+
+      const passoUp = TAM_UP * PAR_UP;
+      for (let i = 0; i < paraSubir.length; i += passoUp) {
+        const rodada = [];
+        for (let j = 0; j < PAR_UP; j++) {
+          const lote = paraSubir.slice(i + j * TAM_UP, i + (j + 1) * TAM_UP);
+          if (lote.length === 0) break;
+          rodada.push(
+            gql(destination.shop,
+              `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
+              { files: lote.map(montarInput) }, tokenDest)
+            .then(r => ({ lote, r }))
+            .catch(e => ({ lote, erro: e }))
+          );
+        }
+        const resultados = await Promise.all(rodada);
+        for (const res of resultados) {
+          if (res.erro || (res.r.fileCreate?.userErrors || []).length > 0) {
+            await subirUmPorUm(res.lote); // plano B, um por um
           } else {
-            // O lote falhou — tenta um por um com base64 (plano B, mais lento mas garantido)
-            for (const arq of lote) {
-              try {
-                const b64 = await downloadBase64(arq.url);
-                if (!b64) { falhasUpload++; continue; }
-                const ext = arq.filename.split(".").pop().toLowerCase();
-                const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
-                const r2 = await gql(destination.shop,
-                  `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
-                  { files: [{ filename: arq.filename, alt: arq.alt, contentType: "IMAGE", duplicateResolutionMode: "REPLACE", originalSource: `data:${mime};base64,${b64}` }] },
-                  tokenDest);
-                if ((r2.fileCreate?.userErrors || []).length === 0) uploaded++;
-                else falhasUpload++;
-              } catch { falhasUpload++; }
-              await sleep(150);
-            }
+            uploaded += res.lote.length;
           }
-        } catch { falhasUpload += lote.length; }
-        await sleep(300);
+        }
+        progress("files", Math.min(i + passoUp, paraSubir.length), paraSubir.length);
+        log(`  ⬆️ ${uploaded} de ${paraSubir.length} enviados...`);
+        await sleep(400);
       }
       log(`✅ Arquivos: ${uploaded} enviados | ${jaExistem} reaproveitados | ${falhasUpload} falhas`, "success");
 
@@ -637,21 +658,35 @@ const runClone = async (body, send) => {
 
         log(`📁 ${keys.length} assets do tema a copiar (incluindo imagens do tema)`);
         let copiados = 0, falhas = 0;
-        for (let i = 0; i < keys.length; i++) {
-          progress("theme", i + 1, keys.length);
+
+        const copiarAsset = async (key) => {
           try {
-            const ad = await restCall("GET", origin.shop, `/themes/${tOrigem.id}/assets.json?asset[key]=${encodeURIComponent(keys[i])}`, tokenOrig);
-            const putBody = { asset: { key: keys[i] } };
+            const ad = await restCall("GET", origin.shop, `/themes/${tOrigem.id}/assets.json?asset[key]=${encodeURIComponent(key)}`, tokenOrig);
+            const putBody = { asset: { key } };
             if (ad.asset?.value !== undefined) {
               putBody.asset.value = trocarUrls(replaceContent(ad.asset.value));
             } else if (ad.asset?.attachment) {
-              // Binário (imagens, fonts do tema) — copia direto em base64
               putBody.asset.attachment = ad.asset.attachment;
-            } else continue;
+            } else return;
             await restCall("PUT", destination.shop, `/themes/${tDestino.id}/assets.json`, tokenDest, putBody);
             copiados++;
           } catch { falhas++; }
-          await sleep(80);
+        };
+
+        // Tira o settings_data.json da fila — ele vai SOZINHO no final,
+        // quando todas as sections/templates/imagens já existem
+        const filaNormal = keys.filter(k => k !== "config/settings_data.json");
+        const temSettings = keys.includes("config/settings_data.json");
+
+        for (let i = 0; i < filaNormal.length; i += 3) {
+          const chunk = filaNormal.slice(i, i + 3);
+          progress("theme", Math.min(i + 3, filaNormal.length), keys.length);
+          await Promise.allSettled(chunk.map(copiarAsset));
+        }
+        if (temSettings) {
+          log(`  ⚙️ Enviando settings_data.json por último (configurações e banners da home)...`);
+          await copiarAsset("config/settings_data.json");
+          progress("theme", keys.length, keys.length);
         }
         log(`✅ Tema: ${copiados} assets copiados | ${falhas} falhas`, "success");
       }
