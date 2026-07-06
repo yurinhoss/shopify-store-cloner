@@ -156,7 +156,7 @@ app.post("/api/auth", async (req, res) => {
 //  LÓGICA DO CLONE — roda em background, mandando eventos pro job
 // ============================================================
 const runClone = async (body, send) => {
-  const { origin, destination, options, customize } = body;
+  const { origin, destination, options, customize, shippingCosts } = body;
 
   // Função que substitui nome da loja e email em qualquer texto
   function replaceContent(text) {
@@ -879,9 +879,15 @@ const runClone = async (body, send) => {
       const shopData = await gql(destination.shop, `query{shop{currencyCode}}`, {}, tokenDest);
       const moedaLoja = shopData.shop.currencyCode;
       const taxa = TAXA_CAMBIO[moedaLoja] || 1;
-      const precoStd = (4.90 * taxa).toFixed(2);
-      const precoPri = (9.70 * taxa).toFixed(2);
 
+      // Valores que você digitou na tela (em EUR). Aceita vírgula ou ponto.
+      // Se vier vazio/inválido, usa 4.90 e 9.70 como reserva.
+      const baseStd = parseFloat(String(shippingCosts?.standard ?? "4.90").replace(",", ".")) || 4.90;
+      const basePri = parseFloat(String(shippingCosts?.express ?? "9.70").replace(",", ".")) || 9.70;
+      const precoStd = (baseStd * taxa).toFixed(2);
+      const precoPri = (basePri * taxa).toFixed(2);
+
+      log(`💰 Valores da tela: Padrão €${baseStd.toFixed(2)} | Expresso €${basePri.toFixed(2)}`);
       log(`💰 Moeda da loja: ${moedaLoja} | Standard: ${moedaLoja} ${precoStd} | Priority: ${moedaLoja} ${precoPri}`);
 
       // Pega delivery profile
@@ -941,7 +947,7 @@ const runClone = async (body, send) => {
           } catch {}
           await sleep(100);
         }
-        log(`✅ Fretes: ${shCriados} países criados | Standard €4.90 | Priority €9.70`, "success");
+        log(`✅ Fretes: ${shCriados} países criados | Padrão ${moedaLoja} ${precoStd} | Expresso ${moedaLoja} ${precoPri}`, "success");
       }
     }
 
