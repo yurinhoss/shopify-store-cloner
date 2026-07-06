@@ -1465,21 +1465,36 @@ const runReset = async (body, send) => {
       }
       log(`🖼️ ${apagarIds.length} arquivos a apagar | ${puladosProt} protegidos (em uso por produtos)`);
 
-      // 3. Apaga em lotes de 50
+      // 3. Apaga em rodadas de 750 (3 chamadas de 250 ao mesmo tempo)
+      //    — o máximo que a Shopify aceita por chamada é 250, então a gente
+      //    compensa mandando 3 chamadas em paralelo por rodada.
       let ok = 0, erros = 0;
-      for (let i = 0; i < apagarIds.length; i += 50) {
-        const lote = apagarIds.slice(i, i + 50);
-        progress("reset_arquivos", Math.min(i + 50, apagarIds.length), apagarIds.length);
-        try {
-          const r = await gql(destination.shop,
-            `mutation($ids:[ID!]!){fileDelete(fileIds:$ids){deletedFileIds userErrors{message}}}`,
-            { ids: lote }, tokenDest);
-          const deletados = (r.fileDelete?.deletedFileIds || []).length;
+      const TAM_LOTE = 250, PARALELO = 3;
+      const passo = TAM_LOTE * PARALELO; // 750 por rodada
+      for (let i = 0; i < apagarIds.length; i += passo) {
+        const rodada = [];
+        for (let j = 0; j < PARALELO; j++) {
+          const lote = apagarIds.slice(i + j * TAM_LOTE, i + (j + 1) * TAM_LOTE);
+          if (lote.length === 0) break;
+          rodada.push(
+            gql(destination.shop,
+              `mutation($ids:[ID!]!){fileDelete(fileIds:$ids){deletedFileIds userErrors{message}}}`,
+              { ids: lote }, tokenDest)
+            .then(r => ({ lote, r }))
+            .catch(e => ({ lote, erro: e }))
+          );
+        }
+        const resultados = await Promise.all(rodada);
+        for (const res of resultados) {
+          if (res.erro) { erros += res.lote.length; log(`  ❌ ${res.erro.message.slice(0, 70)}`); continue; }
+          const deletados = (res.r.fileDelete?.deletedFileIds || []).length;
           ok += deletados;
-          const ue = r.fileDelete?.userErrors || [];
-          if (ue.length > 0) { erros += lote.length - deletados; log(`  ⚠️ ${ue[0].message.slice(0, 70)}`); }
-        } catch (e) { erros += lote.length; log(`  ❌ ${e.message.slice(0, 70)}`); }
-        await sleep(400);
+          const ue = res.r.fileDelete?.userErrors || [];
+          if (ue.length > 0) { erros += res.lote.length - deletados; log(`  ⚠️ ${ue[0].message.slice(0, 70)}`); }
+        }
+        progress("reset_arquivos", Math.min(i + passo, apagarIds.length), apagarIds.length);
+        log(`  🗑️ ${ok} de ${apagarIds.length} apagados...`);
+        await sleep(500);
       }
       log(`✅ Arquivos: ${ok} apagados | ${puladosProt} protegidos | ${erros} erros`, "success");
     }
