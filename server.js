@@ -1703,6 +1703,33 @@ function reviewPrompt(tipo, produto, pais) {
   return base + (extras[tipo] || "");
 }
 
+// ============================================================
+//  PROXY DO JUDGE.ME — o navegador não pode chamar o Judge.me
+//  direto (regra de segurança CORS), então a tela pede aqui e
+//  o servidor repassa: tela → servidor → judge.me → de volta
+// ============================================================
+app.post("/api/jm-proxy", async (req, res) => {
+  try {
+    const { method, path, body } = req.body;
+    // Segurança: só aceita caminhos da API do Judge.me
+    if (!path || !path.startsWith("/api/")) {
+      return res.status(400).json({ error: "Caminho inválido" });
+    }
+    const opts = {
+      method: method || "GET",
+      headers: { "Content-Type": "application/json" },
+    };
+    if (body && (method || "GET") !== "GET") opts.body = JSON.stringify(body);
+
+    const r = await fetch(`https://judge.me${path}`, opts);
+    const text = await r.text();
+    res.status(r.status);
+    try { res.json(JSON.parse(text)); } catch { res.send(text); }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/reviews", async (req, res) => {
   const { shop, clientId, clientSecret, judgemeToken, claudeKey, perProduct, productLimit } = req.body;
 
