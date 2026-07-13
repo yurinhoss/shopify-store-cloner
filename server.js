@@ -152,11 +152,8 @@ app.post("/api/auth", async (req, res) => {
 // ============================================================
 //  API: CLONE (SSE — Server-Sent Events)
 // ============================================================
-// ============================================================
-//  LÓGICA DO CLONE — roda em background, mandando eventos pro job
-// ============================================================
-const runClone = async (body, send) => {
-  const { origin, destination, options, customize, shippingCosts } = body;
+app.post("/api/clone", async (req, res) => {
+  const { origin, destination, options, customize } = req.body;
 
   // Função que substitui nome da loja e email em qualquer texto
   function replaceContent(text) {
@@ -173,6 +170,14 @@ const runClone = async (body, send) => {
     }
     return result;
   }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const send = (type, data) => {
+    res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+  };
 
   const log = (msg, status = "info") => send("log", { msg, status });
   const progress = (step, current, total) => send("progress", { step, current, total });
@@ -265,30 +270,24 @@ const runClone = async (body, send) => {
       existentes.forEach((c) => handlesDest.set(c.handle, c.id));
 
       let criados = 0, pulados = 0;
-      // Separa: as que já existem só entram no mapa; as novas vão em lotes de 5
-      const novasSmart = [];
-      for (const c of cols) {
+      for (let i = 0; i < cols.length; i++) {
+        const c = cols[i];
+        progress("smart_collections", i + 1, cols.length);
         if (handlesDest.has(c.handle)) {
           collectionIdMap[c.id] = handlesDest.get(c.handle);
-          pulados++;
-        } else novasSmart.push(c);
-      }
-      for (let i = 0; i < novasSmart.length; i += 5) {
-        const chunk = novasSmart.slice(i, i + 5);
-        progress("smart_collections", Math.min(i + 5, novasSmart.length), novasSmart.length);
-        await Promise.allSettled(chunk.map(async (c) => {
-          try {
-            const body = { smart_collection: { title: c.title, handle: c.handle, body_html: replaceContent(c.body_html), rules: c.rules, disjunctive: c.disjunctive, sort_order: c.sort_order, published: true } };
-            if (c.image?.src) {
-              const b64 = await downloadBase64(c.image.src);
-              body.smart_collection.image = b64 ? { attachment: b64 } : { src: c.image.src };
-            }
-            const data = await restCall("POST", destination.shop, "/smart_collections.json", tokenDest, body);
-            collectionIdMap[c.id] = data.smart_collection.id;
-            criados++;
-          } catch {}
-        }));
-        await sleep(150);
+          pulados++; continue;
+        }
+        try {
+          const body = { smart_collection: { title: c.title, handle: c.handle, body_html: replaceContent(c.body_html), rules: c.rules, disjunctive: c.disjunctive, sort_order: c.sort_order, published: true } };
+          if (c.image?.src) {
+            const b64 = await downloadBase64(c.image.src);
+            body.smart_collection.image = b64 ? { attachment: b64 } : { src: c.image.src };
+          }
+          const data = await restCall("POST", destination.shop, "/smart_collections.json", tokenDest, body);
+          collectionIdMap[c.id] = data.smart_collection.id;
+          criados++;
+        } catch {}
+        await sleep(100);
       }
       log(`✅ Smart collections: ${criados} criadas | ${pulados} já existiam`, "success");
 
@@ -298,15 +297,12 @@ const runClone = async (body, send) => {
       const existentesCust = await restPaginated(destination.shop, "/custom_collections.json?limit=250&fields=id,handle", tokenDest, "custom_collections");
       const handlesDestCust = new Map();
       existentesCust.forEach((c) => handlesDestCust.set(c.handle, c.id));
-      log(`📚 ${customCols.length} coleções na origem | ${existentesCust.length} já no destino`);
 
-      let criadosC = 0, puladosC = 0, totalCollects = 0, errosC = 0;
+      let criadosC = 0, puladosC = 0, totalCollects = 0;
       for (let i = 0; i < customCols.length; i++) {
         const c = customCols[i];
         progress("custom_collections", i + 1, customCols.length);
         let destColId;
-
-        // ── A coleção em si: cria só se não existir ──
         if (handlesDestCust.has(c.handle)) {
           destColId = handlesDestCust.get(c.handle);
           collectionIdMap[c.id] = destColId;
@@ -322,52 +318,27 @@ const runClone = async (body, send) => {
             destColId = data.custom_collection.id;
             collectionIdMap[c.id] = destColId;
             criadosC++;
-          } catch (e) {
-            errosC++;
-            log(`  ❌ Coleção "${c.title}": ${e.message.slice(0, 70)}`);
-            continue;
-          }
+          } catch { continue; }
         }
-
-        // ── Os vínculos (collects): só adiciona os produtos que FALTAM ──
+        // Add collects in order
         try {
-          // O que a coleção tem na origem
-          const collectsOrig = await restPaginated(origin.shop, `/collects.json?collection_id=${c.id}&limit=250`, tokenOrig, "collects");
-          // O que a coleção já tem no destino
-          const collectsDest = await restPaginated(destination.shop, `/collects.json?collection_id=${destColId}&limit=250&fields=product_id`, tokenDest, "collects");
-          const jaVinculados = new Set(collectsDest.map(cd => cd.product_id));
-
-          const faltando = collectsOrig
-            .map(col => productIdMap[col.product_id])
-            .filter(id => id && !jaVinculados.has(id));
-
-          if (faltando.length === 0) {
-            // Nada a fazer nessa coleção — segue pra próxima na hora
-            continue;
-          }
-          log(`  🔗 "${c.title}": ${jaVinculados.size} produtos já vinculados, adicionando ${faltando.length}...`);
-
-          // GraphQL aceita até 250 produtos POR CHAMADA (antes: 1 por chamada!)
-          for (let j = 0; j < faltando.length; j += 250) {
-            const lote = faltando.slice(j, j + 250);
+          const collects = await restPaginated(origin.shop, `/collects.json?collection_id=${c.id}&limit=250`, tokenOrig, "collects");
+          let pos = 1;
+          for (const col of collects) {
+            const newProdId = productIdMap[col.product_id];
+            if (!newProdId) continue;
             try {
-              const r = await gql(destination.shop,
-                `mutation($id:ID!,$pids:[ID!]!){collectionAddProductsV2(id:$id,productIds:$pids){job{id}userErrors{field message}}}`,
-                { id: `gid://shopify/Collection/${destColId}`, pids: lote.map(id => `gid://shopify/Product/${id}`) },
-                tokenDest);
-              const ue = r.collectionAddProductsV2?.userErrors || [];
-              if (ue.length > 0) { errosC++; log(`  ⚠️ "${c.title}": ${ue[0].message.slice(0, 60)}`); }
-              else totalCollects += lote.length;
-            } catch (e) { errosC++; log(`  ⚠️ "${c.title}": ${e.message.slice(0, 60)}`); }
-            await sleep(200);
+              await restCall("POST", destination.shop, "/collects.json", tokenDest, {
+                collect: { collection_id: destColId, product_id: newProdId, position: pos++ },
+              });
+              totalCollects++;
+            } catch {}
+            await sleep(50);
           }
-        } catch (e) {
-          errosC++;
-          log(`  ⚠️ Vínculos de "${c.title}": ${e.message.slice(0, 70)}`);
-        }
+        } catch {}
         await sleep(80);
       }
-      log(`✅ Custom collections: ${criadosC} criadas | ${puladosC} existiam | ${totalCollects} produtos vinculados | ${errosC} erros`, "success");
+      log(`✅ Custom collections: ${criadosC} criadas | ${puladosC} existiam | ${totalCollects} collects`, "success");
     }
 
     // ==== PÁGINAS ====
@@ -445,13 +416,11 @@ const runClone = async (body, send) => {
     // ==== ARQUIVOS (banners, ícones) ====
     if (options.files) {
       log("━━━━━━━━━━ ETAPA 7: ARQUIVOS (banners, ícones) ━━━━━━━━━━");
-
-      // ── 7.1 Lista os arquivos da ORIGEM ──
       const arquivos = [];
       let cursor = null;
       while (true) {
         const after = cursor ? `, after: "${cursor}"` : "";
-        const q = `query { files(first: 100${after}) { edges { cursor node { ... on MediaImage { id alt image { url originalSrc } fileStatus } ... on GenericFile { id url alt fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
+        const q = `query { files(first: 50${after}) { edges { cursor node { ... on MediaImage { id alt image { url originalSrc } fileStatus } ... on GenericFile { id url alt fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
         const data = await gql(origin.shop, q, {}, tokenOrig);
         for (const e of data.files.edges) {
           const n = e.node;
@@ -464,140 +433,46 @@ const runClone = async (body, send) => {
         if (!data.files.pageInfo.hasNextPage) break;
         cursor = data.files.pageInfo.endCursor;
       }
-      log(`📁 ${arquivos.length} arquivos encontrados na origem`);
+      log(`📁 ${arquivos.length} arquivos encontrados`);
 
-      // ── 7.2 REMOVE as fotos de produto da lista ──
-      // Pegadinha da Shopify: a API de "files" devolve TAMBÉM as fotos dos
-      // produtos, não só os banners da aba Conteúdo → Arquivos. Como as fotos
-      // de produto já sobem junto com os produtos na Etapa 1, subir aqui de
-      // novo = tudo duplicado. Então a gente lista as fotos de produto da
-      // origem e tira elas da lista.
-      const fotosProduto = new Set();
-      try {
-        const prods = await restPaginated(origin.shop, "/products.json?limit=250&fields=id,images", tokenOrig, "products");
-        for (const p of prods) {
-          for (const img of (p.images || [])) {
-            if (img.src) fotosProduto.add(img.src.split("?")[0].split("/").pop());
-          }
-        }
-      } catch (e) { log(`⚠️ Não consegui listar fotos de produto: ${e.message.slice(0,60)}`); }
-
-      const soArquivosReais = arquivos.filter(a => !fotosProduto.has(a.filename));
-      log(`🖼️ ${arquivos.length - soArquivosReais.length} fotos de produto ignoradas (já sobem na Etapa 1) → ${soArquivosReais.length} arquivos de verdade`);
-
-      // ── 7.3 PULA o que já existe no destino ──
-      // Se um clone anterior deu erro no meio, os arquivos que já subiram
-      // ficam salvos — então a gente lista o destino e só sobe o que falta.
-      const filenameMapDest = {}; // nome do arquivo → URL no destino
-      const lerArquivosDestino = async () => {
-        let c = null, total = 0;
-        while (true) {
-          const after = c ? `, after: "${c}"` : "";
-          const q = `query { files(first: 100${after}) { edges { cursor node { ... on MediaImage { image { url } fileStatus } ... on GenericFile { url fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
-          const d = await gql(destination.shop, q, {}, tokenDest);
-          for (const e of d.files.edges) {
-            const n = e.node;
-            const u = n?.image?.url || n?.url;
-            if (u && n.fileStatus === "READY") {
-              filenameMapDest[u.split("/").pop().split("?")[0]] = u;
-              total++;
-            }
-          }
-          if (!d.files.pageInfo.hasNextPage) break;
-          c = d.files.pageInfo.endCursor;
-        }
-        return total;
-      };
-      await lerArquivosDestino();
-
-      const paraSubir = soArquivosReais.filter(a => !filenameMapDest[a.filename]);
-      const jaExistem = soArquivosReais.length - paraSubir.length;
-      log(`⏭️ ${jaExistem} já existem no destino | ⬆️ ${paraSubir.length} a subir`);
-
-      // ── 7.4 SOBE EM LOTES DE 10 (muito mais rápido) ──
-      // Em vez de baixar cada foto pro servidor e re-enviar (lento), a gente
-      // manda a URL da CDN da origem e a PRÓPRIA SHOPIFY busca o arquivo.
-      // E em vez de 1 por vez, vão 10 numa chamada só.
-      let uploaded = 0, falhasUpload = 0;
-      const TAM_UP = 50, PAR_UP = 3; // 3 chamadas de 50 = 150 arquivos por rodada
-      const montarInput = (arq) => {
-        const ext = arq.filename.split(".").pop().toLowerCase();
-        const isImage = ["png","gif","webp","svg","jpg","jpeg","avif","heic"].includes(ext);
-        return {
-          filename: arq.filename,
-          alt: arq.alt,
-          contentType: isImage ? "IMAGE" : "FILE",
-          duplicateResolutionMode: "REPLACE",
-          originalSource: arq.url,
-        };
-      };
-      // Plano B pra quando um lote falha: tenta cada arquivo sozinho, em base64
-      const subirUmPorUm = async (lote) => {
-        for (const arq of lote) {
-          try {
-            const b64 = await downloadBase64(arq.url);
-            if (!b64) { falhasUpload++; continue; }
+      // Mapa URL origem → URL destino (para substituir no tema depois)
+      const urlMap = {};
+      let uploaded = 0;
+      for (let i = 0; i < arquivos.length; i++) {
+        const arq = arquivos[i];
+        progress("files", i + 1, arquivos.length);
+        try {
+          // Baixa como base64 pra garantir o upload mesmo de CDN protegido
+          const b64 = await downloadBase64(arq.url);
+          if (b64) {
             const ext = arq.filename.split(".").pop().toLowerCase();
             const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
-            const r2 = await gql(destination.shop,
-              `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
-              { files: [{ ...montarInput(arq), originalSource: `data:${mime};base64,${b64}` }] },
+            const r = await gql(destination.shop,
+              `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{...on MediaImage{image{url}}}userErrors{message}}}`,
+              { files: [{ originalSource: `data:${mime};base64,${b64}`, contentType: "IMAGE", filename: arq.filename }] },
               tokenDest);
-            if ((r2.fileCreate?.userErrors || []).length === 0) uploaded++;
-            else falhasUpload++;
-          } catch { falhasUpload++; }
-          await sleep(150);
-        }
-      };
-
-      const passoUp = TAM_UP * PAR_UP;
-      for (let i = 0; i < paraSubir.length; i += passoUp) {
-        const rodada = [];
-        for (let j = 0; j < PAR_UP; j++) {
-          const lote = paraSubir.slice(i + j * TAM_UP, i + (j + 1) * TAM_UP);
-          if (lote.length === 0) break;
-          rodada.push(
-            gql(destination.shop,
-              `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
-              { files: lote.map(montarInput) }, tokenDest)
-            .then(r => ({ lote, r }))
-            .catch(e => ({ lote, erro: e }))
-          );
-        }
-        const resultados = await Promise.all(rodada);
-        for (const res of resultados) {
-          if (res.erro || (res.r.fileCreate?.userErrors || []).length > 0) {
-            await subirUmPorUm(res.lote); // plano B, um por um
+            const novaUrl = r.fileCreate?.files?.[0]?.image?.url;
+            if (novaUrl) urlMap[arq.url] = novaUrl;
+            uploaded++;
           } else {
-            uploaded += res.lote.length;
+            // Fallback: passa URL diretamente
+            await gql(destination.shop, `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
+              { files: [{ originalSource: arq.url, alt: arq.alt, contentType: "IMAGE" }] }, tokenDest);
+            uploaded++;
           }
-        }
-        progress("files", Math.min(i + passoUp, paraSubir.length), paraSubir.length);
-        log(`  ⬆️ ${uploaded} de ${paraSubir.length} enviados...`);
-        await sleep(400);
+        } catch {}
+        await sleep(200);
       }
-      log(`✅ Arquivos: ${uploaded} enviados | ${jaExistem} reaproveitados | ${falhasUpload} falhas`, "success");
+      log(`✅ Arquivos: ${uploaded} enviados | ${Object.keys(urlMap).length} URLs mapeadas`, "success");
+      await sleep(3000); // aguarda Shopify processar
 
-      // ── 7.5 Espera processar e monta o mapa de URLs (origem → destino) ──
-      if (paraSubir.length > 0) {
-        for (let tentativa = 1; tentativa <= 6; tentativa++) {
-          await sleep(5000);
-          const prontos = await lerArquivosDestino();
-          const faltam = soArquivosReais.filter(a => !filenameMapDest[a.filename]).length;
-          log(`⏳ Tentativa ${tentativa}/6 — ${prontos} prontos no destino | ${faltam} ainda processando`);
-          if (faltam === 0) break;
-        }
+      // Guarda urlMap no contexto para usar no tema
+      if (Object.keys(urlMap).length > 0) {
+        log(`🔄 URLs de CDN mapeadas para substituição no tema`);
+        // Armazena no objeto customize para reutilizar no tema
+        customize._urlMap = urlMap;
+        customize._originShopCDN = origin.shop.replace(".myshopify.com", "");
       }
-
-      const urlMap = {};
-      for (const arq of soArquivosReais) {
-        const destUrl = filenameMapDest[arq.filename];
-        if (destUrl) urlMap[arq.url] = destUrl;
-      }
-      log(`🔄 ${Object.keys(urlMap).length} URLs mapeadas para substituição no tema`, "success");
-      customize._urlMap = urlMap;
-      customize._filenameMapDest = filenameMapDest;
-      customize._originShopCDN = origin.shop.replace(".myshopify.com", "");
     }
 
     // ==== TEMA ====
@@ -610,239 +485,121 @@ const runClone = async (body, send) => {
 
       if (tOrigem && tDestino) {
         const assetsOrig = await restCall("GET", origin.shop, `/themes/${tOrigem.id}/assets.json`, tokenOrig);
+        const keys = (assetsOrig.assets || []).map((a) => a.key).filter((k) =>
+          k.startsWith("config/") || k.startsWith("templates/") || k.startsWith("sections/") ||
+          k.startsWith("snippets/") || k.startsWith("layout/") || k.startsWith("locales/") ||
+          (k.startsWith("assets/") && (k.endsWith(".css") || k.endsWith(".js") || k.endsWith(".json") || k.endsWith(".svg")))
+        );
 
-        // Agora copia TODOS os assets — incluindo imagens/fonts dentro de assets/
-        // (antes só copiava .css/.js/.json/.svg, e os banners que vivem DENTRO
-        //  do tema como assets/banner.jpg nunca eram copiados)
-        let keys = (assetsOrig.assets || []).map((a) => a.key);
-
-        // Ordem importa: settings_data.json (onde ficam os banners da home)
-        // vai por ÚLTIMO, depois que sections/templates/imagens já existem.
-        const peso = (k) => {
-          if (k === "config/settings_data.json") return 99;
-          if (k.startsWith("config/")) return 90;
-          if (k.startsWith("templates/")) return 50;
-          if (k.startsWith("sections/")) return 40;
-          if (k.startsWith("snippets/")) return 30;
-          if (k.startsWith("layout/")) return 20;
-          if (k.startsWith("locales/")) return 60;
-          return 10; // assets/ primeiro (imagens do tema disponíveis antes)
-        };
-        keys.sort((a, b) => peso(a) - peso(b));
-
-        // Função que troca QUALQUER url do CDN da origem pela do destino,
-        // casando pelo NOME do arquivo (mais robusto que URL exata, porque
-        // a Shopify muda os caminhos internos entre lojas)
-        const trocarUrls = (value) => {
-          if (customize._urlMap) {
-            for (const [origUrl, destUrl] of Object.entries(customize._urlMap)) {
-              value = value.split(origUrl).join(destUrl);
-              const origBase = origUrl.split("?")[0];
-              const destBase = destUrl.split("?")[0];
-              if (origBase !== origUrl) value = value.split(origBase).join(destBase);
-            }
-          }
-          if (customize._filenameMapDest) {
-            for (const [fname, destUrl] of Object.entries(customize._filenameMapDest)) {
-              // regex: qualquer https://cdn.shopify.com/....../NOME-DO-ARQUIVO(?v=123)
-              const esc = fname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-              const re = new RegExp(`(?:https?:)?//cdn\\.shopify\\.com/[^"'\\\\)\\s]*?/${esc}(?:\\?[^"'\\\\)\\s]*)?`, "g");
-              value = value.replace(re, destUrl.split("?")[0]);
-            }
-          }
-          if (customize._originShopCDN) {
-            value = value.split(customize._originShopCDN).join(destination.shop.replace(".myshopify.com", ""));
-          }
-          return value;
-        };
-
-        log(`📁 ${keys.length} assets do tema a copiar (incluindo imagens do tema)`);
-        let copiados = 0, falhas = 0;
-
-        const copiarAsset = async (key) => {
+        log(`📁 ${keys.length} assets do tema a copiar`);
+        let copiados = 0;
+        for (let i = 0; i < keys.length; i++) {
+          progress("theme", i + 1, keys.length);
           try {
-            const ad = await restCall("GET", origin.shop, `/themes/${tOrigem.id}/assets.json?asset[key]=${encodeURIComponent(key)}`, tokenOrig);
-            const putBody = { asset: { key } };
+            const ad = await restCall("GET", origin.shop, `/themes/${tOrigem.id}/assets.json?asset[key]=${encodeURIComponent(keys[i])}`, tokenOrig);
+            const putBody = { asset: { key: keys[i] } };
             if (ad.asset?.value !== undefined) {
-              putBody.asset.value = trocarUrls(replaceContent(ad.asset.value));
+              let value = replaceContent(ad.asset.value);
+              // Substitui URLs do CDN da origem pelas novas URLs do destino
+              if (customize._urlMap) {
+                for (const [origUrl, destUrl] of Object.entries(customize._urlMap)) {
+                  value = value.split(origUrl).join(destUrl);
+                  // Também tenta sem parâmetros de query
+                  const origBase = origUrl.split("?")[0];
+                  const destBase = destUrl.split("?")[0];
+                  if (origBase !== origUrl) value = value.split(origBase).join(destBase);
+                }
+              }
+              // Substitui referências ao shop da origem (shopify CDN genérico)
+              if (customize._originShopCDN) {
+                value = value.split(customize._originShopCDN).join(destination.shop.replace(".myshopify.com", ""));
+              }
+              putBody.asset.value = value;
             } else if (ad.asset?.attachment) {
               putBody.asset.attachment = ad.asset.attachment;
-            } else return;
+            } else continue;
             await restCall("PUT", destination.shop, `/themes/${tDestino.id}/assets.json`, tokenDest, putBody);
             copiados++;
-          } catch { falhas++; }
-        };
-
-        // Tira o settings_data.json da fila — ele vai SOZINHO no final,
-        // quando todas as sections/templates/imagens já existem
-        const filaNormal = keys.filter(k => k !== "config/settings_data.json");
-        const temSettings = keys.includes("config/settings_data.json");
-
-        for (let i = 0; i < filaNormal.length; i += 3) {
-          const chunk = filaNormal.slice(i, i + 3);
-          progress("theme", Math.min(i + 3, filaNormal.length), keys.length);
-          await Promise.allSettled(chunk.map(copiarAsset));
+          } catch {}
+          await sleep(80);
         }
-        if (temSettings) {
-          log(`  ⚙️ Enviando settings_data.json por último (configurações e banners da home)...`);
-          await copiarAsset("config/settings_data.json");
-          progress("theme", keys.length, keys.length);
-        }
-        log(`✅ Tema: ${copiados} assets copiados | ${falhas} falhas`, "success");
+        log(`✅ Tema: ${copiados} assets copiados`, "success");
       }
     }
 
-    // ==== MARKETS: CLONE EXATO DA ORIGEM (países + moeda + idiomas + URL) ====
+    // ==== MARKETS GLOBAIS ====
     if (options.markets) {
-      log("━━━━━━━━━━ ETAPA 9: MARKETS (clone exato da origem) ━━━━━━━━━━");
+      log("━━━━━━━━━━ ETAPA 9: MARKETS GLOBAIS ━━━━━━━━━━");
 
-      // ── 9.1 IDIOMAS: instala e publica no destino os MESMOS idiomas da origem ──
-      const locOrig = await gql(origin.shop, `query { shopLocales { locale primary published } }`, {}, tokenOrig);
-      const locDest = await gql(destination.shop, `query { shopLocales { locale primary published } }`, {}, tokenDest);
-      const instalados = new Set(locDest.shopLocales.map(l => l.locale));
+      const PAISES_MARKETS = [
+        {code:"DE",name:"Germany"},{code:"FR",name:"France"},{code:"IT",name:"Italy"},{code:"ES",name:"Spain"},
+        {code:"PT",name:"Portugal"},{code:"NL",name:"Netherlands"},{code:"BE",name:"Belgium"},{code:"AT",name:"Austria"},
+        {code:"IE",name:"Ireland"},{code:"LU",name:"Luxembourg"},{code:"GR",name:"Greece"},{code:"FI",name:"Finland"},
+        {code:"GB",name:"United Kingdom"},{code:"CH",name:"Switzerland"},{code:"SE",name:"Sweden"},{code:"NO",name:"Norway"},
+        {code:"DK",name:"Denmark"},{code:"PL",name:"Poland"},{code:"CZ",name:"Czech Republic"},{code:"HU",name:"Hungary"},
+        {code:"RO",name:"Romania"},{code:"BG",name:"Bulgaria"},{code:"HR",name:"Croatia"},{code:"SK",name:"Slovakia"},
+        {code:"CY",name:"Cyprus"},{code:"EE",name:"Estonia"},{code:"LV",name:"Latvia"},{code:"LT",name:"Lithuania"},
+        {code:"SI",name:"Slovenia"},{code:"MT",name:"Malta"},
+        {code:"US",name:"United States"},{code:"CA",name:"Canada"},{code:"MX",name:"Mexico"},
+        {code:"BR",name:"Brazil"},{code:"AR",name:"Argentina"},{code:"CL",name:"Chile"},{code:"CO",name:"Colombia"},
+        {code:"PE",name:"Peru"},{code:"UY",name:"Uruguay"},{code:"EC",name:"Ecuador"},
+        {code:"JP",name:"Japan"},{code:"KR",name:"South Korea"},{code:"SG",name:"Singapore"},
+        {code:"HK",name:"Hong Kong"},{code:"TW",name:"Taiwan"},{code:"AU",name:"Australia"},{code:"NZ",name:"New Zealand"},
+        {code:"CN",name:"China"},{code:"IN",name:"India"},{code:"TH",name:"Thailand"},
+        {code:"AE",name:"UAE"},{code:"IL",name:"Israel"},{code:"SA",name:"Saudi Arabia"},
+        {code:"ZA",name:"South Africa"},{code:"MA",name:"Morocco"},{code:"TR",name:"Turkey"},
+      ];
 
-      const idiomasOrigem = locOrig.shopLocales.filter(l => !l.primary);
-      log(`📚 Origem tem ${locOrig.shopLocales.length} idiomas | Destino tem ${instalados.size}`);
-
-      for (const l of idiomasOrigem) {
-        if (!instalados.has(l.locale)) {
-          try {
-            await gql(destination.shop,
-              `mutation($locale:String!){shopLocaleEnable(locale:$locale){userErrors{message}}}`,
-              { locale: l.locale }, tokenDest);
-            instalados.add(l.locale);
-            log(`  ➕ Idioma instalado: ${l.locale}`);
-          } catch (e) { log(`  ⚠️ Não instalou ${l.locale}: ${e.message.slice(0,60)}`); }
-          await sleep(150);
-        }
-        if (l.published) {
-          try {
-            await gql(destination.shop,
-              `mutation($locale:String!,$sl:ShopLocaleInput!){shopLocaleUpdate(locale:$locale,shopLocale:$sl){userErrors{message}}}`,
-              { locale: l.locale, sl: { published: true } }, tokenDest);
-          } catch {}
-          await sleep(100);
-        }
-      }
-
-      // ── 9.2 LÊ os markets da ORIGEM com toda a configuração ──
-      // (webPresence: tenta o formato novo da API; se falhar, usa o antigo)
-      const lerMarkets = async (shop, token) => {
-        const base = `id name enabled regions(first: 250) { edges { node { ... on MarketRegionCountry { code } } } } currencySettings { baseCurrency { currencyCode } localCurrencies }`;
-        let q = `query { markets(first: 100) { edges { node { ${base} webPresence { id defaultLocale alternateLocales subfolderSuffix } } } } }`;
-        try {
-          const d = await gql(shop, q, {}, token);
-          return d.markets.edges.map(e => e.node);
-        } catch {
-          // Formato novo: defaultLocale/alternateLocales viram objetos
-          q = `query { markets(first: 100) { edges { node { ${base} webPresence { id defaultLocale { locale } alternateLocales { locale } subfolderSuffix } } } } }`;
-          const d = await gql(shop, q, {}, token);
-          return d.markets.edges.map(e => {
-            const n = e.node;
-            if (n.webPresence) {
-              n.webPresence.defaultLocale = n.webPresence.defaultLocale?.locale || n.webPresence.defaultLocale;
-              n.webPresence.alternateLocales = (n.webPresence.alternateLocales || []).map(a => a.locale || a);
-            }
-            return n;
-          });
-        }
-      };
-
-      const marketsOrig = await lerMarkets(origin.shop, tokenOrig);
-      const marketsDest = await lerMarkets(destination.shop, tokenDest);
-      log(`🌍 Origem: ${marketsOrig.length} markets | Destino: ${marketsDest.length} markets`);
-
-      // Índices do destino: por nome e por país (para saber o que já existe)
-      const destPorNome = {};
-      const paisesNoDest = new Set();
-      for (const m of marketsDest) {
-        destPorNome[m.name.toLowerCase()] = m;
-        for (const r of m.regions.edges) if (r.node.code) paisesNoDest.add(r.node.code);
-      }
-
-      // ── 9.3 Recria cada market da origem no destino, idêntico ──
-      let mkCriados = 0, mkAtualizados = 0, mkErros = 0;
-      for (let i = 0; i < marketsOrig.length; i++) {
-        const mo = marketsOrig[i];
-        progress("markets", i + 1, marketsOrig.length);
-        const paisesOrig = mo.regions.edges.map(r => r.node.code).filter(Boolean);
-        if (paisesOrig.length === 0) continue;
-
-        try {
-          let marketIdDest = destPorNome[mo.name.toLowerCase()]?.id;
-
-          if (!marketIdDest) {
-            // Cria o market só com os países que ainda não estão em outro market
-            const paisesLivres = paisesOrig.filter(c => !paisesNoDest.has(c));
-            if (paisesLivres.length === 0) { log(`  ⏭️ ${mo.name}: países já cobertos no destino`); continue; }
-            const r = await gql(destination.shop,
-              `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id}userErrors{field message}}}`,
-              { input: { name: mo.name, enabled: mo.enabled !== false, regions: paisesLivres.map(c => ({ countryCode: c })) } },
-              tokenDest);
-            if (r.marketCreate.userErrors.length > 0) {
-              log(`  ⚠️ ${mo.name}: ${r.marketCreate.userErrors[0].message.slice(0,70)}`);
-              mkErros++; continue;
-            }
-            marketIdDest = r.marketCreate.market.id;
-            paisesLivres.forEach(c => paisesNoDest.add(c));
-            mkCriados++;
-          } else {
-            mkAtualizados++;
-          }
-
-          // Moeda: copia EXATAMENTE a config da origem
-          const cs = mo.currencySettings || {};
-          try {
-            const inputMoeda = cs.localCurrencies
-              ? { localCurrencies: true }
-              : { baseCurrency: cs.baseCurrency?.currencyCode, localCurrencies: false };
-            if (inputMoeda.baseCurrency || inputMoeda.localCurrencies) {
-              await gql(destination.shop,
-                `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
-                { id: marketIdDest, i: inputMoeda }, tokenDest);
-            }
-          } catch (e) { log(`  ⚠️ Moeda ${mo.name}: ${e.message.slice(0,60)}`); }
-
-          // Idiomas + URL (subfolder): copia a webPresence da origem
-          const wpo = mo.webPresence;
-          if (wpo && wpo.defaultLocale) {
-            const alts = (wpo.alternateLocales || []).filter(l => instalados.has(l));
-            const wpInput = {
-              defaultLocale: wpo.defaultLocale,
-              alternateLocales: alts,
-            };
-            if (wpo.subfolderSuffix) wpInput.subfolderSuffix = wpo.subfolderSuffix;
-
-            if (instalados.has(wpo.defaultLocale) || locDest.shopLocales.some(l => l.primary && l.locale === wpo.defaultLocale)) {
-              try {
-                // Já tem webPresence no destino? Atualiza. Senão, cria.
-                const dWp = await gql(destination.shop,
-                  `query($id:ID!){market(id:$id){webPresence{id}}}`, { id: marketIdDest }, tokenDest);
-                const wpId = dWp.market?.webPresence?.id;
-                if (wpId) {
-                  const ru = await gql(destination.shop,
-                    `mutation($id:ID!,$wp:MarketWebPresenceUpdateInput!){marketWebPresenceUpdate(webPresenceId:$id,webPresence:$wp){userErrors{field message}}}`,
-                    { id: wpId, wp: wpInput }, tokenDest);
-                  if (ru.marketWebPresenceUpdate.userErrors.length > 0)
-                    log(`  ⚠️ URL ${mo.name}: ${ru.marketWebPresenceUpdate.userErrors[0].message.slice(0,70)}`);
-                } else {
-                  const rc = await gql(destination.shop,
-                    `mutation($mid:ID!,$wp:MarketWebPresenceCreateInput!){marketWebPresenceCreate(marketId:$mid,webPresence:$wp){userErrors{field message}}}`,
-                    { mid: marketIdDest, wp: wpInput }, tokenDest);
-                  if (rc.marketWebPresenceCreate.userErrors.length > 0)
-                    log(`  ⚠️ URL ${mo.name}: ${rc.marketWebPresenceCreate.userErrors[0].message.slice(0,70)}`);
+      // Lista países já em markets INDIVIDUAIS (ignora Global/International)
+      const existingCountries = new Set();
+      try {
+        const mData = await gql(destination.shop, `
+          query {
+            markets(first: 100) {
+              edges {
+                node {
+                  name
+                  regions(first: 100) {
+                    edges { node { ... on MarketRegionCountry { code } } }
+                  }
                 }
-              } catch (e) { log(`  ⚠️ WebPresence ${mo.name}: ${e.message.slice(0,60)}`); }
+              }
             }
           }
-        } catch (e) {
-          mkErros++;
-          log(`  ❌ ${mo.name}: ${e.message.slice(0,70)}`);
+        `, {}, tokenDest);
+        for (const e of mData.markets.edges) {
+          const regionCount = e.node.regions.edges.length;
+          // Pula markets com muitos países (Global/International = catch-all)
+          if (regionCount > 10) {
+            log(`⏭️ Ignorando market "${e.node.name}" (${regionCount} países — catch-all)`);
+            continue;
+          }
+          for (const r of e.node.regions.edges) if (r.node.code) existingCountries.add(r.node.code);
         }
-        await sleep(200);
+      } catch {}
+
+      const novos = PAISES_MARKETS.filter(p => !existingCountries.has(p.code));
+      log(`🌍 ${existingCountries.size} países já cobertos | ${novos.length} a criar`);
+
+      let mkCriados = 0;
+      for (let i = 0; i < novos.length; i++) {
+        const p = novos[i];
+        progress("markets", i + 1, novos.length);
+        try {
+          const r = await gql(destination.shop, `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id}userErrors{field message}}}`,
+            { input: { name: p.name, enabled: true, regions: [{ countryCode: p.code }] } }, tokenDest);
+          if (r.marketCreate.userErrors.length === 0) {
+            mkCriados++;
+            // Tenta ativar moeda local
+            try {
+              await gql(destination.shop, `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
+                { id: r.marketCreate.market.id, i: { localCurrencies: true } }, tokenDest);
+            } catch {}
+          }
+        } catch {}
+        await sleep(100);
       }
-      log(`✅ Markets: ${mkCriados} criados | ${mkAtualizados} atualizados (já existiam) | ${mkErros} erros`, "success");
-      log(`💡 Confere em Settings → Markets: países, moedas, idiomas e subfolders devem estar idênticos à origem`);
+      log(`✅ Markets: ${mkCriados} criados | ${existingCountries.size} já existiam`, "success");
     }
 
     // ==== FRETES POR PAÍS ====
@@ -914,15 +671,9 @@ const runClone = async (body, send) => {
       const shopData = await gql(destination.shop, `query{shop{currencyCode}}`, {}, tokenDest);
       const moedaLoja = shopData.shop.currencyCode;
       const taxa = TAXA_CAMBIO[moedaLoja] || 1;
+      const precoStd = (4.90 * taxa).toFixed(2);
+      const precoPri = (9.70 * taxa).toFixed(2);
 
-      // Valores que você digitou na tela (em EUR). Aceita vírgula ou ponto.
-      // Se vier vazio/inválido, usa 4.90 e 9.70 como reserva.
-      const baseStd = parseFloat(String(shippingCosts?.standard ?? "4.90").replace(",", ".")) || 4.90;
-      const basePri = parseFloat(String(shippingCosts?.express ?? "9.70").replace(",", ".")) || 9.70;
-      const precoStd = (baseStd * taxa).toFixed(2);
-      const precoPri = (basePri * taxa).toFixed(2);
-
-      log(`💰 Valores da tela: Padrão €${baseStd.toFixed(2)} | Expresso €${basePri.toFixed(2)}`);
       log(`💰 Moeda da loja: ${moedaLoja} | Standard: ${moedaLoja} ${precoStd} | Priority: ${moedaLoja} ${precoPri}`);
 
       // Pega delivery profile
@@ -982,7 +733,7 @@ const runClone = async (body, send) => {
           } catch {}
           await sleep(100);
         }
-        log(`✅ Fretes: ${shCriados} países criados | Padrão ${moedaLoja} ${precoStd} | Expresso ${moedaLoja} ${precoPri}`, "success");
+        log(`✅ Fretes: ${shCriados} países criados | Standard €4.90 | Priority €9.70`, "success");
       }
     }
 
@@ -1164,667 +915,590 @@ const runClone = async (body, send) => {
       }
     }
 
-    // ==== ETAPA 12: CHECKLIST DO QUE FALTA CONFIGURAR ====
-    // Compara origem × destino no que a API deixa LER, e monta a lista
-    // do que a Shopify obriga a fazer manualmente (pagamentos, domínio, etc.)
-    try {
-      log("━━━━━━━━━━ ETAPA 12: CHECKLIST FINAL ━━━━━━━━━━");
-      const handle = destination.shop.replace(".myshopify.com", "");
-      const adm = (p) => `https://admin.shopify.com/store/${handle}${p}`;
-
-      let sOr = {}, sDe = {}, metaOrig = "";
-      try { sOr = (await restCall("GET", origin.shop, "/shop.json", tokenOrig)).shop || {}; } catch {}
-      try { sDe = (await restCall("GET", destination.shop, "/shop.json", tokenDest)).shop || {}; } catch {}
-      try { metaOrig = (await gql(origin.shop, `query { shop { description } }`, {}, tokenOrig)).shop?.description || ""; } catch {}
-
-      const temDominio = sDe.domain && !sDe.domain.includes(".myshopify.com");
-
-      const items = [
-        {
-          id: "pagamentos", titulo: "Pagamentos", url: adm("/settings/payments"), auto: false,
-          desc: "Ativar Shopify Payments ou outro gateway. A Shopify NUNCA deixa clonar isso via API (proteção contra fraude).",
-        },
-        {
-          id: "dominio", titulo: "Domínio personalizado", url: adm("/settings/domains"), auto: temDominio,
-          desc: temDominio
-            ? `Já conectado: ${sDe.domain} ✓`
-            : `Conectar o domínio próprio da loja (hoje está em ${sDe.domain || destination.shop}).`,
-        },
-        {
-          id: "preferencias", titulo: "Preferências da loja virtual", url: adm("/online_store/preferences"), auto: false,
-          desc: `Título da home, meta description, imagem social e senha da loja. A API não escreve aqui. Meta description da origem para copiar: "${(metaOrig || "(vazia)").slice(0, 200)}"`,
-        },
-        {
-          id: "moeda", titulo: "Moeda principal da loja", url: adm("/settings/general"),
-          auto: !!(sOr.currency && sDe.currency && sOr.currency === sDe.currency),
-          desc: sOr.currency === sDe.currency
-            ? `As duas lojas usam ${sDe.currency} ✓`
-            : `Origem usa ${sOr.currency || "?"} e destino usa ${sDe.currency || "?"} — ajustar em Settings → General → Store currency (só dá pra mudar antes da primeira venda).`,
-        },
-        {
-          id: "idioma", titulo: "Idioma principal da loja", url: adm("/settings/languages"),
-          auto: !!(sOr.primary_locale && sDe.primary_locale && sOr.primary_locale === sDe.primary_locale),
-          desc: sOr.primary_locale === sDe.primary_locale
-            ? `As duas lojas usam "${sDe.primary_locale}" como idioma principal ✓`
-            : `Origem: "${sOr.primary_locale || "?"}" | Destino: "${sDe.primary_locale || "?"}" — o idioma PRINCIPAL só muda pelo admin.`,
-        },
-        {
-          id: "checkout", titulo: "Checkout", url: adm("/settings/checkout"), auto: false,
-          desc: "Conferir campos do cliente, e-mail x telefone, dicas de gorjeta e configurações de conta — a API não clona essa tela.",
-        },
-        {
-          id: "impostos", titulo: "Impostos e taxas", url: adm("/settings/taxes"), auto: false,
-          desc: "Conferir se a cobrança de impostos (IVA na Europa) está configurada igual à origem.",
-        },
-        {
-          id: "email", titulo: "E-mail do remetente", url: adm("/settings/notifications"),
-          auto: !!(customize?.destEmail && sDe.email && sDe.email.toLowerCase() === customize.destEmail.toLowerCase()),
-          desc: `Verificar o e-mail que aparece pros clientes (sender email). Destino hoje: ${sDe.email || "?"}.`,
-        },
-        {
-          id: "apps", titulo: "Apps de terceiros", url: adm("/settings/apps"), auto: false,
-          desc: "Reinstalar e configurar apps (Judge.me, upsell, etc.) — cada app guarda os dados no servidor dele, fora da Shopify.",
-        },
-        {
-          id: "pixel", titulo: "Meta Pixel / rastreamento", url: adm("/settings/customer_events"), auto: false,
-          desc: "Reconectar o Pixel do Meta e outros rastreamentos na loja nova (cada loja precisa do seu).",
-        },
-        {
-          id: "envio-config", titulo: "Revisar fretes e Markets", url: adm("/settings/shipping"), auto: false,
-          desc: "O clone copiou tudo, mas vale abrir Settings → Shipping e Settings → Markets e bater o olho comparando com a origem.",
-        },
-        {
-          id: "teste", titulo: "Pedido de teste", url: `https://${sDe.domain || destination.shop}`, auto: false,
-          desc: "Abrir a loja, navegar como cliente e simular uma compra até o checkout pra garantir que está tudo funcionando.",
-        },
-      ];
-
-      const pendentes = items.filter(i => !i.auto).length;
-      log(`📋 Checklist gerado: ${pendentes} itens pendentes de ${items.length}`);
-      send("checklist", { items, destShop: destination.shop });
-    } catch (e) {
-      log(`⚠️ Não consegui gerar o checklist: ${e.message.slice(0, 80)}`);
-    }
-
     send("done", { msg: "🎉 Clonagem completa!" });
   } catch (err) {
     send("error", { msg: `💥 Erro fatal: ${err.message}` });
   }
-};
-
-// ============================================================
-//  SISTEMA DE JOBS — o clone roda em background no servidor.
-//  Se a internet do navegador cair, ele reconecta e recebe
-//  tudo que perdeu (os eventos ficam guardados na memória).
-// ============================================================
-const jobs = {};
-
-function criarJob() {
-  const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  jobs[id] = { events: [], finished: false, createdAt: Date.now() };
-  return id;
-}
-
-// Limpa jobs com mais de 2 horas (pra memória não crescer pra sempre)
-setInterval(() => {
-  const agora = Date.now();
-  for (const [id, j] of Object.entries(jobs)) {
-    if (agora - j.createdAt > 2 * 60 * 60 * 1000) delete jobs[id];
-  }
-}, 10 * 60 * 1000);
-
-// Inicia o clone: devolve o jobId na hora e roda o clone em background
-app.post("/api/clone-start", (req, res) => {
-  const jobId = criarJob();
-  const send = (type, data) => {
-    const j = jobs[jobId];
-    if (!j) return;
-    j.events.push({ type, ...data });
-    if (type === "done" || type === "error") j.finished = true;
-  };
-  res.json({ jobId });
-  runClone(req.body, send).catch((err) => send("error", { msg: `💥 ${err.message}` }));
+  res.end();
 });
 
-// Stream de status: manda os eventos guardados + os novos, com keepalive
-app.get("/api/clone-status/:id", async (req, res) => {
-  const job = jobs[req.params.id];
-  if (!job) { res.status(404).json({ error: "Job não encontrado" }); return; }
+// ============================================================
+//  API: REVIEWS GENERATOR (Judge.me)
+// ============================================================
+app.post("/api/reviews", async (req, res) => {
+  const { shop, token, qty, fivePct, openaiKey, useImages } = req.body;
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
-  let i = 0;
-  let vivo = true;
-  req.on("close", () => { vivo = false; });
-  const keepalive = setInterval(() => { try { res.write(":keepalive\n\n"); } catch {} }, 15000);
+  const send = (type, data) => res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+  const log = (msg) => send("log", { msg });
 
-  while (vivo) {
-    while (i < job.events.length) {
-      res.write(`data: ${JSON.stringify(job.events[i++])}\n\n`);
-    }
-    if (job.finished && i >= job.events.length) break;
-    await sleep(400);
+  const NOMES = [
+    'James W.','Sophie M.','Lucas B.','Emma T.','Noah K.','Olivia R.',
+    'Liam S.','Ava C.','Mason D.','Isabella F.','Ethan G.','Mia H.',
+    'Alexander J.','Charlotte L.','Benjamin N.','Amelia P.','William Q.',
+    'Harper V.','Evelyn Z.','Michael R.','Sarah K.','David L.',
+    'Emma J.','Chris B.','Laura S.','Tom W.','Anna M.','Peter H.','Lisa G.',
+    'Carlos M.','Maria S.','João P.','Ana L.','Ricardo F.','Paula C.',
+    'Daniel A.','Fernanda B.','Gabriel N.','Camila O.','Felipe T.','Julia R.',
+  ];
+
+  const TEXTOS5 = [
+    "Absolutely love the fit. The design is unique and gets compliments every time I wear it. Quality exceeded my expectations.",
+    "Amazing product! Fast shipping and the quality is top notch. Will definitely order again.",
+    "Perfect fit and the material feels premium. Exactly as described. Very happy with this purchase.",
+    "Incredible quality for the price. The design is stylish and modern. Highly recommend!",
+    "Best purchase I've made this year. The product looks even better in person. 10/10!",
+    "Great quality and fast delivery. The sizing was spot on. Love it!",
+    "This exceeded all my expectations. Excellent craftsmanship and arrived quickly.",
+    "Stunning design and very comfortable. I've received so many compliments already.",
+    "Very satisfied with this purchase. The quality is premium and shipping was fast.",
+    "Exactly what I was looking for. Fits perfectly and looks amazing. Will buy again!",
+    "Outstanding quality. Well made and looks fantastic. Highly recommend.",
+    "Love this! Unique design and excellent quality. Very happy customer.",
+    "Perfect in every way. Fast shipping, great packaging, beautiful product.",
+    "Incredible value. Quality is much better than expected. 5 stars without hesitation.",
+    "Fits true to size and the material is very comfortable. Love everything about it.",
+    "Super stylish and very well made. Shipping was quick and packaging was great.",
+    "These are my new favourite. Comfort level is off the charts!",
+    "Gorgeous design and the quality feels premium. Very impressed with this purchase.",
+  ];
+
+  const TEXTOS4 = [
+    "Really nice product overall. Quality is good and shipping was reasonably fast. Happy with my purchase.",
+    "Good quality item. Looks great and fits well. Minor delay in shipping but worth the wait.",
+    "Nice product, quality is solid. Would have given 5 stars but took a bit longer to arrive.",
+    "Good purchase overall. Product is as described and quality is decent. Would buy again.",
+    "Happy with it. Good quality and nice design. Delivery was a bit slow but okay.",
+  ];
+
+  const TITULOS5 = ['Love it!','Perfect!','Amazing quality','Exceeded expectations','Highly recommend!','5 stars!','Best purchase!','Absolutely stunning','So comfortable!','Great product!'];
+  const TITULOS4 = ['Really good','Nice product','Good quality','Happy with it','Worth buying'];
+
+  function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function emailRand(nome) {
+    const dominios = ['gmail.com','yahoo.com','hotmail.com','outlook.com','icloud.com'];
+    return nome.toLowerCase().replace(/[^a-z]/g,'') + Math.floor(Math.random()*999) + '@' + rand(dominios);
   }
-  clearInterval(keepalive);
-  res.end();
-});
-
-// ============================================================
-//  RESET DE ETAPAS — apaga dados da loja DESTINO para poder
-//  clonar de novo do zero (ex: moeda errada → apagar markets
-//  e fretes e recriar). Usa o mesmo sistema de jobs do clone.
-// ============================================================
-const runReset = async (body, send) => {
-  const { destination, etapas } = body;
-  const log = (msg, status = "info") => send("log", { msg, status });
-  const progress = (step, current, total) => send("progress", { step, current, total });
 
   try {
-    log("🔑 Autenticando na loja destino...");
-    const tokenDest = await getToken(destination.shop, destination.clientId, destination.clientSecret);
-    log(`✅ Autenticado em ${destination.shop}`, "success");
+    // 1. Busca produtos via Judge.me
+    log("🔍 Buscando produtos da loja...");
+    const prodRes = await fetch(`https://judge.me/api/v1/products?api_token=${token}&shop_domain=${shop}&per_page=100`, {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const prodData = await prodRes.json();
+    const products = prodData.products || [];
 
-    // ── MARKETS: apaga todos, menos o principal (a Shopify não deixa) ──
-    if (etapas.markets) {
-      log("━━━━━━━━━━ RESET: MARKETS ━━━━━━━━━━");
-      const d = await gql(destination.shop, `query { markets(first: 100) { edges { node { id name primary } } } }`, {}, tokenDest);
-      const todos = d.markets.edges.map(e => e.node);
-      const apagar = todos.filter(m => !m.primary);
-      log(`🌍 ${todos.length} markets | ${apagar.length} serão apagados (o principal fica)`);
-      let ok = 0, erros = 0;
-      for (let i = 0; i < apagar.length; i++) {
-        progress("reset_markets", i + 1, apagar.length);
+    if (!products.length) {
+      send("error", { msg: "Nenhum produto encontrado. Verifique o token e o shop domain." });
+      res.end(); return;
+    }
+
+    send("products", { count: products.length });
+    log(`✅ ${products.length} produtos encontrados`);
+
+    // 2. Gera imagens via DALL-E se configurado
+    const imagens = [];
+    if (useImages && openaiKey) {
+      const QTD_IMGS = 10;
+      log(`🎨 Gerando ${QTD_IMGS} imagens via DALL-E 3...`);
+      const prods_embaralhados = [...products].sort(() => Math.random() - 0.5);
+      for (let i = 0; i < QTD_IMGS; i++) {
+        const p = prods_embaralhados[i % prods_embaralhados.length];
         try {
-          const r = await gql(destination.shop,
-            `mutation($id:ID!){marketDelete(id:$id){deletedId userErrors{message}}}`,
-            { id: apagar[i].id }, tokenDest);
-          if ((r.marketDelete?.userErrors || []).length > 0) {
-            erros++;
-            log(`  ⚠️ ${apagar[i].name}: ${r.marketDelete.userErrors[0].message.slice(0, 70)}`);
-          } else ok++;
-        } catch (e) { erros++; log(`  ❌ ${apagar[i].name}: ${e.message.slice(0, 70)}`); }
-        await sleep(150);
+          const imgRes = await fetch('https://api.openai.com/v1/images/generations', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openaiKey}` },
+            body: JSON.stringify({ model: 'dall-e-3', prompt: `Person wearing or using ${p.title}, lifestyle photo, natural daylight, clean background, high quality fashion photography`, n: 1, size: '1024x1024', quality: 'hd' })
+          });
+          const imgData = await imgRes.json();
+          const url = imgData.data?.[0]?.url;
+          if (url) {
+            imagens.push(url);
+            log(`  🖼️ Imagem ${i+1}/${QTD_IMGS} gerada`);
+          }
+        } catch { log(`  ⚠️ Falha imagem ${i+1}`); }
+        await sleep(1200);
       }
-      log(`✅ Markets: ${ok} apagados | ${erros} erros`, "success");
+      log(`✅ ${imagens.length} imagens prontas`);
     }
 
-    // ── FRETES: apaga as zonas que o clonador criou (nome = código do país) ──
-    if (etapas.fretes) {
-      log("━━━━━━━━━━ RESET: FRETES ━━━━━━━━━━");
-      const profData = await gql(destination.shop, `
-        query { deliveryProfiles(first: 10) { edges { node { id default
-          profileLocationGroups { locationGroup { id }
-            locationGroupZones(first: 100) { edges { node { zone { id name } } } } } } } } }`, {}, tokenDest);
-      const profile = profData.deliveryProfiles.edges.map(e => e.node).find(p => p.default);
-      if (!profile) { log("❌ Perfil de entrega padrão não encontrado", "error"); }
-      else {
-        const zonas = [];
-        for (const lg of profile.profileLocationGroups)
-          for (const ze of lg.locationGroupZones.edges)
-            zonas.push(ze.node.zone);
-        // Só apaga zonas com nome de 2 letras (DE, FR, IT...) — foi o clonador
-        // que criou essas. Zonas com outros nomes (ex: "Brasil Grátis") ficam.
-        const apagar = zonas.filter(z => /^[A-Z]{2}$/.test(z.name));
-        const mantidas = zonas.length - apagar.length;
-        log(`🚚 ${zonas.length} zonas | ${apagar.length} serão apagadas | ${mantidas} mantidas (nome personalizado)`);
-        let ok = 0, erros = 0;
-        for (let i = 0; i < apagar.length; i += 20) {
-          const lote = apagar.slice(i, i + 20);
-          progress("reset_fretes", Math.min(i + 20, apagar.length), apagar.length);
-          try {
-            const r = await gql(destination.shop,
-              `mutation($id:ID!,$profile:DeliveryProfileInput!){deliveryProfileUpdate(id:$id,profile:$profile){profile{id}userErrors{field message}}}`,
-              { id: profile.id, profile: { zonesToDelete: lote.map(z => z.id) } }, tokenDest);
-            if ((r.deliveryProfileUpdate?.userErrors || []).length > 0) {
-              erros += lote.length;
-              log(`  ⚠️ ${r.deliveryProfileUpdate.userErrors[0].message.slice(0, 80)}`);
-            } else ok += lote.length;
-          } catch (e) { erros += lote.length; log(`  ❌ ${e.message.slice(0, 80)}`); }
-          await sleep(300);
-        }
-        log(`✅ Fretes: ${ok} zonas apagadas | ${erros} erros`, "success");
-      }
-    }
+    // 3. Distribui reviews pelos produtos
+    const reviewsPorProduto = Math.ceil(qty / products.length);
+    let criadas = 0;
 
-    // ── COLEÇÕES: apaga smart + custom ──
-    if (etapas.colecoes) {
-      log("━━━━━━━━━━ RESET: COLEÇÕES ━━━━━━━━━━");
-      const smart = await restPaginated(destination.shop, "/smart_collections.json?limit=250&fields=id,title", tokenDest, "smart_collections");
-      const custom = await restPaginated(destination.shop, "/custom_collections.json?limit=250&fields=id,title", tokenDest, "custom_collections");
-      log(`📚 ${smart.length} smart + ${custom.length} custom a apagar`);
-      let ok = 0, erros = 0;
-      const apagarLista = [
-        ...smart.map(c => ({ id: c.id, tipo: "smart_collections" })),
-        ...custom.map(c => ({ id: c.id, tipo: "custom_collections" })),
-      ];
-      for (let i = 0; i < apagarLista.length; i += 5) {
-        const lote = apagarLista.slice(i, i + 5);
-        progress("reset_colecoes", Math.min(i + 5, apagarLista.length), apagarLista.length);
-        const rs = await Promise.allSettled(lote.map(c =>
-          restCall("DELETE", destination.shop, `/${c.tipo}/${c.id}.json`, tokenDest)));
-        for (const r of rs) r.status === "fulfilled" ? ok++ : erros++;
-        await sleep(250);
-      }
-      log(`✅ Coleções: ${ok} apagadas | ${erros} erros`, "success");
-    }
+    for (const product of products) {
+      const qtdProd = Math.min(reviewsPorProduto, qty - criadas);
+      if (qtdProd <= 0) break;
 
-    // ── PÁGINAS ──
-    if (etapas.paginas) {
-      log("━━━━━━━━━━ RESET: PÁGINAS ━━━━━━━━━━");
-      const pgs = await restPaginated(destination.shop, "/pages.json?limit=250&fields=id,title", tokenDest, "pages");
-      log(`📄 ${pgs.length} páginas a apagar`);
-      let ok = 0, erros = 0;
-      for (let i = 0; i < pgs.length; i += 5) {
-        const lote = pgs.slice(i, i + 5);
-        progress("reset_paginas", Math.min(i + 5, pgs.length), pgs.length);
-        const rs = await Promise.allSettled(lote.map(p =>
-          restCall("DELETE", destination.shop, `/pages/${p.id}.json`, tokenDest)));
-        for (const r of rs) r.status === "fulfilled" ? ok++ : erros++;
-        await sleep(250);
-      }
-      log(`✅ Páginas: ${ok} apagadas | ${erros} erros`, "success");
-    }
+      for (let i = 0; i < qtdProd; i++) {
+        const stars = Math.random() * 100 < (fivePct || 85) ? 5 : 4;
+        const nome = rand(NOMES);
+        const texto = stars === 5 ? rand(TEXTOS5) : rand(TEXTOS4);
+        const titulo = stars === 5 ? rand(TITULOS5) : rand(TITULOS4);
+        const usarImg = imagens.length > 0 && criadas % 8 === 0;
+        const imgUrl = usarImg ? imagens[Math.floor(Math.random() * imagens.length)] : null;
 
-    // ── MENUS: apaga os que a Shopify deixa (os padrão do sistema ficam) ──
-    if (etapas.menus) {
-      log("━━━━━━━━━━ RESET: MENUS ━━━━━━━━━━");
-      try {
-        const d = await gql(destination.shop, `query { menus(first: 50) { edges { node { id title isDefault } } } }`, {}, tokenDest);
-        const menus = d.menus.edges.map(e => e.node);
-        const apagar = menus.filter(m => !m.isDefault);
-        log(`📑 ${menus.length} menus | ${apagar.length} podem ser apagados`);
-        let ok = 0, erros = 0;
-        for (const m of apagar) {
-          try {
-            const r = await gql(destination.shop,
-              `mutation($id:ID!){menuDelete(id:$id){deletedMenuId userErrors{message}}}`,
-              { id: m.id }, tokenDest);
-            if ((r.menuDelete?.userErrors || []).length > 0) { erros++; }
-            else ok++;
-          } catch { erros++; }
-          await sleep(150);
-        }
-        log(`✅ Menus: ${ok} apagados | ${erros} erros`, "success");
-      } catch (e) { log(`⚠️ Menus: ${e.message.slice(0, 80)}`); }
-    }
+        const body = {
+          api_token: token,
+          shop_domain: shop,
+          platform: 'shopify',
+          id: product.external_id,
+          title: titulo,
+          body: texto,
+          rating: stars,
+          name: nome,
+          email: emailRand(nome),
+          picture_urls: imgUrl ? [imgUrl] : [],
+          verified_buyer: Math.random() > 0.3,
+          featured: Math.random() > 0.7,
+          curated: 'ok',
+          published: true,
+        };
 
-    // ── DESCONTOS ──
-    if (etapas.descontos) {
-      log("━━━━━━━━━━ RESET: DESCONTOS ━━━━━━━━━━");
-      const prs = await restPaginated(destination.shop, "/price_rules.json?limit=250", tokenDest, "price_rules");
-      log(`🎟️ ${prs.length} descontos a apagar`);
-      let ok = 0, erros = 0;
-      for (let i = 0; i < prs.length; i++) {
-        progress("reset_descontos", i + 1, prs.length);
-        try { await restCall("DELETE", destination.shop, `/price_rules/${prs[i].id}.json`, tokenDest); ok++; }
-        catch { erros++; }
-        await sleep(150);
-      }
-      log(`✅ Descontos: ${ok} apagados | ${erros} erros`, "success");
-    }
+        try {
+          const r = await fetch('https://judge.me/api/v1/reviews', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          if (r.status === 200 || r.status === 201) {
+            criadas++;
+            send("review", { stars, name: nome, img: !!imgUrl });
+          } else {
+            const err = await r.json();
+            log(`  ⚠️ Erro: ${JSON.stringify(err)}`);
+          }
+        } catch(e) { log(`  ⚠️ Exceção: ${e.message}`); }
 
-    // ── ARQUIVOS: apaga fotos/vídeos soltos, PROTEGENDO as fotos dos produtos ──
-    if (etapas.arquivos) {
-      log("━━━━━━━━━━ RESET: ARQUIVOS ━━━━━━━━━━");
-
-      // 1. Lista as fotos que os produtos USAM — essas são intocáveis.
-      //    (senão a loja ficaria com todos os produtos sem imagem)
-      const protegidos = new Set();
-      try {
-        const prods = await restPaginated(destination.shop, "/products.json?limit=250&fields=id,images", tokenDest, "products");
-        for (const p of prods)
-          for (const img of (p.images || []))
-            if (img.src) protegidos.add(img.src.split("?")[0].split("/").pop());
-        log(`🛡️ ${protegidos.size} fotos de produto protegidas (não serão apagadas)`);
-      } catch (e) { log(`⚠️ Não consegui listar fotos de produto: ${e.message.slice(0, 60)}`); }
-
-      // 2. Lista todos os arquivos da loja e separa o que pode apagar
-      const apagarIds = [];
-      let puladosProt = 0, cursor = null;
-      while (true) {
-        const after = cursor ? `, after: "${cursor}"` : "";
-        const q = `query { files(first: 100${after}) { edges { cursor node { ... on MediaImage { id image { url } } ... on GenericFile { id url } ... on Video { id } } } pageInfo { hasNextPage endCursor } } }`;
-        const d = await gql(destination.shop, q, {}, tokenDest);
-        for (const e of d.files.edges) {
-          const n = e.node;
-          if (!n.id) continue;
-          const u = n?.image?.url || n?.url;
-          const fname = u ? u.split("/").pop().split("?")[0] : null;
-          if (fname && protegidos.has(fname)) { puladosProt++; continue; }
-          apagarIds.push(n.id);
-        }
-        if (!d.files.pageInfo.hasNextPage) break;
-        cursor = d.files.pageInfo.endCursor;
-      }
-      log(`🖼️ ${apagarIds.length} arquivos a apagar | ${puladosProt} protegidos (em uso por produtos)`);
-
-      // 3. Apaga em rodadas de 750 (3 chamadas de 250 ao mesmo tempo)
-      //    — o máximo que a Shopify aceita por chamada é 250, então a gente
-      //    compensa mandando 3 chamadas em paralelo por rodada.
-      let ok = 0, erros = 0;
-      const TAM_LOTE = 250, PARALELO = 3;
-      const passo = TAM_LOTE * PARALELO; // 750 por rodada
-      for (let i = 0; i < apagarIds.length; i += passo) {
-        const rodada = [];
-        for (let j = 0; j < PARALELO; j++) {
-          const lote = apagarIds.slice(i + j * TAM_LOTE, i + (j + 1) * TAM_LOTE);
-          if (lote.length === 0) break;
-          rodada.push(
-            gql(destination.shop,
-              `mutation($ids:[ID!]!){fileDelete(fileIds:$ids){deletedFileIds userErrors{message}}}`,
-              { ids: lote }, tokenDest)
-            .then(r => ({ lote, r }))
-            .catch(e => ({ lote, erro: e }))
-          );
-        }
-        const resultados = await Promise.all(rodada);
-        for (const res of resultados) {
-          if (res.erro) { erros += res.lote.length; log(`  ❌ ${res.erro.message.slice(0, 70)}`); continue; }
-          const deletados = (res.r.fileDelete?.deletedFileIds || []).length;
-          ok += deletados;
-          const ue = res.r.fileDelete?.userErrors || [];
-          if (ue.length > 0) { erros += res.lote.length - deletados; log(`  ⚠️ ${ue[0].message.slice(0, 70)}`); }
-        }
-        progress("reset_arquivos", Math.min(i + passo, apagarIds.length), apagarIds.length);
-        log(`  🗑️ ${ok} de ${apagarIds.length} apagados...`);
-        await sleep(500);
-      }
-      log(`✅ Arquivos: ${ok} apagados | ${puladosProt} protegidos | ${erros} erros`, "success");
-    }
-
-    // ── PRODUTOS (⚠️ apaga TUDO) ──
-    if (etapas.produtos) {
-      log("━━━━━━━━━━ RESET: PRODUTOS ⚠️ ━━━━━━━━━━");
-      const prods = await restPaginated(destination.shop, "/products.json?limit=250&fields=id", tokenDest, "products");
-      log(`📦 ${prods.length} produtos a apagar — isso pode demorar alguns minutos`);
-      let ok = 0, erros = 0;
-      for (let i = 0; i < prods.length; i += 5) {
-        const lote = prods.slice(i, i + 5);
-        progress("reset_produtos", Math.min(i + 5, prods.length), prods.length);
-        const rs = await Promise.allSettled(lote.map(p =>
-          restCall("DELETE", destination.shop, `/products/${p.id}.json`, tokenDest)));
-        for (const r of rs) r.status === "fulfilled" ? ok++ : erros++;
-        if (i % 100 === 0 && i > 0) log(`  🗑️ ${ok} apagados até agora...`);
         await sleep(300);
       }
-      log(`✅ Produtos: ${ok} apagados | ${erros} erros`, "success");
+      if (criadas >= qty) break;
     }
 
-    send("done", { msg: "🗑️ Reset concluído! Agora pode clonar de novo essas etapas." });
-  } catch (err) {
-    send("error", { msg: `💥 Erro fatal no reset: ${err.message}` });
-  }
-};
-
-// Inicia o reset (mesmo esquema de jobs do clone)
-app.post("/api/reset-start", (req, res) => {
-  const jobId = criarJob();
-  const send = (type, data) => {
-    const j = jobs[jobId];
-    if (!j) return;
-    j.events.push({ type, ...data });
-    if (type === "done" || type === "error") j.finished = true;
-  };
-  res.json({ jobId });
-  runReset(req.body, send).catch((err) => send("error", { msg: `💥 ${err.message}` }));
-});
-
-// Rota antiga /api/clone (compatibilidade): stream direto na mesma conexão
-app.post("/api/clone", async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  const send = (type, data) => { try { res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`); } catch {} };
-  await runClone(req.body, send).catch((err) => send("error", { msg: `💥 ${err.message}` }));
-  res.end();
-});
-
-// ============================================================
-//  API: REVIEWS GENERATOR (SSE)
-//  Gera 100 reviews realistas com quebra de objeção
-//  Importa via Judge.me API
-// ============================================================
-
-const REVIEW_TIPOS = [
-  { tipo: "entrega_rapida",      rating: 5, peso: 14 },
-  { tipo: "entrega_normal",      rating: 5, peso: 12 },
-  { tipo: "entrega_demorada_ok", rating: 4, peso: 8  },
-  { tipo: "qualidade",           rating: 5, peso: 14 },
-  { tipo: "pagamento_seguro",    rating: 5, peso: 10 },
-  { tipo: "rastreio",            rating: 5, peso: 10 },
-  { tipo: "problema_resolvido",  rating: 4, peso: 8  },
-  { tipo: "recompra",            rating: 5, peso: 8  },
-  { tipo: "presente",            rating: 5, peso: 8  },
-  { tipo: "preco_valor",         rating: 5, peso: 8  },
-];
-
-const REVIEW_NOMES = ["Luca M.","Sofia B.","Marco T.","Emma S.","Thomas K.","Laura F.","David R.","Anna W.","Pierre L.","Elena G.","James H.","Maria C.","Oliver P.","Charlotte D.","Felix N.","Isabella R.","Lucas V.","Hannah M.","Matteo A.","Zoe B.","Andreas K.","Giulia F.","Noah S.","Amelie D.","Finn H.","Sara T.","Max L.","Chloe P.","Rafael A.","Mia W.","Jan K.","Nina P.","Tom B.","Lea S.","Paul R.","Eva M.","Leon H.","Julia W.","Erik N.","Clara D."];
-const REVIEW_PAISES = ["Germany","France","Italy","Spain","Netherlands","Belgium","Portugal","Austria","Sweden","Poland","Denmark","Greece","Finland","Czech Republic","Romania","Ireland","Croatia","Hungary"];
-
-const REVIEW_TITULOS = {
-  entrega_rapida:["Super fast delivery!","Arrived quicker than expected!","Lightning fast shipping!","Delivered in record time!","Amazingly fast!","Faster than Amazon!"],
-  entrega_normal:["Great tracking experience","Arrived as expected","Tracking was perfect","Smooth delivery","No issues at all","Exactly on time"],
-  entrega_demorada_ok:["Worth the wait!","A bit slow but worth it","Patient but very satisfied","Delayed but great product","Good things take time"],
-  qualidade:["Incredible quality!","Exceeded my expectations","Better than retail!","Absolutely love it!","Outstanding quality","Premium feel"],
-  pagamento_seguro:["100% safe to order","Totally trustworthy shop","Secure payment, no worries","Had doubts, but perfect","Safe and reliable"],
-  rastreio:["Love the tracking updates!","Real-time tracking is great","Always knew where it was","Tracking was flawless","Perfect transparency"],
-  problema_resolvido:["Great customer service!","Issue solved super fast","They really care","Small problem, great fix","Support is amazing"],
-  recompra:["My 3rd order already!","Coming back again!","Loyal customer for a reason","Always my first choice","Never disappoints"],
-  presente:["Perfect gift!","They absolutely loved it","Best gift idea!","Made someone very happy","Great for gifting"],
-  preco_valor:["Best price online!","Saved so much money!","Way cheaper than retail","Incredible value","Unbeatable price"],
-};
-
-function reviewFallback(tipo, produto, pais) {
-  const F = {
-    entrega_rapida:[
-      `Ordered on Monday and it arrived Thursday — only 3 business days to ${pais}! The ${produto} is exactly as described, great quality. Packaging was secure and professional. Couldn't be happier!`,
-      `Honestly shocked by how fast it arrived. Ordered and 4 days later it was at my door in ${pais}. The ${produto} looks even better in person. Will definitely order again!`,
-      `5-day delivery to ${pais} which is fantastic. Tracking was spot on. ${produto} is top quality, exactly what I wanted. Already recommended this shop to my friends.`,
-    ],
-    entrega_normal:[
-      `Got the tracking code right after ordering which was reassuring. Could follow every step. Arrived in about a week to ${pais}. The ${produto} is great quality for the price!`,
-      `The tracking updates kept me informed the whole time. Arrived exactly when predicted. ${produto} was well packaged and is excellent quality. Trustworthy store!`,
-      `Received my tracking number within 24 hours. Delivery to ${pais} took 7 days, perfectly reasonable. Very happy with the ${produto}, would buy again.`,
-    ],
-    entrega_demorada_ok:[
-      `Took about 9 days to arrive in ${pais}, a bit longer than expected, but the ${produto} is incredible quality. Totally worth the wait. Tracking worked great throughout.`,
-      `Delivery was around 10 days, not super fast but acceptable for international shipping. The ${produto} is fantastic — perfect quality and exactly as pictured. Happy overall!`,
-      `Had to wait about 8 days but I wasn't stressed because the tracking kept me updated. ${produto} arrived in perfect condition. Great value. 4 stars just for the slight wait.`,
-    ],
-    qualidade:[
-      `Walked past the same ${produto} in a store here in ${pais} for nearly double the price. The quality here is identical if not better. Incredible value. Got compliments already!`,
-      `The material and build quality of the ${produto} is outstanding. Much better than expected for this price. This is now my go-to shop. Absolute bargain!`,
-      `Genuinely impressed by the quality of the ${produto}. Looks and feels premium. I was hesitant but so glad I ordered. Fast becoming my favourite store in ${pais}.`,
-    ],
-    pagamento_seguro:[
-      `I was nervous about ordering from a new shop but the payment was completely secure. Got confirmation immediately. The ${produto} arrived perfectly. 100% trustworthy!`,
-      `Usually cautious about online payments, but I was pleasantly surprised. Everything was smooth and secure. ${produto} arrived quickly and is great quality. Will shop again!`,
-      `Had my reservations but decided to try. Payment was secure, got a confirmation email straight away, and the ${produto} arrived in perfect condition. Totally legit!`,
-    ],
-    rastreio:[
-      `The real-time tracking was the best part. I always knew exactly where my ${produto} was. Arrived right on schedule in ${pais}. Product is fantastic too!`,
-      `Loved getting tracking updates at every stage. No anxiety waiting for the ${produto}. Arrived in perfect condition. Great service all around!`,
-      `The tracking code worked perfectly from dispatch to my door in ${pais}. Made it stress-free. The ${produto} is amazing quality. Highly recommend!`,
-    ],
-    problema_resolvido:[
-      `Received the ${produto} with a tiny packaging defect. Contacted support and they responded within hours. Replacement sent immediately, arrived in 2 days. Exceptional service!`,
-      `Had a small sizing issue with my ${produto}. Reached out and they fixed it within 48 hours. The replacement is perfect. This service makes me a loyal customer!`,
-      `Wrong item sent initially but support sorted it out so quickly I was impressed. Got the correct ${produto} in no time. They really care. 5 stars for the resolution!`,
-    ],
-    recompra:[
-      `This is my third order and they never disappoint. The ${produto} is as good as everything else I've bought. Fast shipping to ${pais} every time. Loyal for life!`,
-      `Already on my second order and planning a third. The ${produto} quality is consistently excellent. My go-to shop now. Highly recommend!`,
-      `Came back because my first order was so good. The ${produto} didn't disappoint. Fast shipping to ${pais}, perfect product. Earned my trust completely.`,
-    ],
-    presente:[
-      `Bought the ${produto} as a birthday gift and the recipient was thrilled. Beautiful packaging, arrived on time in ${pais}, great quality. Will order gifts here again!`,
-      `Got this as a Christmas gift and it was a huge hit. The ${produto} arrived in perfect condition with lovely packaging. Fast delivery, great price. Perfect gift!`,
-      `Ordered the ${produto} as an anniversary gift. Arrived quickly, beautifully packaged, and my partner loved it. Great value and quality. The perfect present!`,
-    ],
-    preco_valor:[
-      `Saw the exact same ${produto} in a shop in ${pais} for almost twice the price. Found this store online and ordered immediately. Same quality, half the price. Never buying retail again!`,
-      `The price-to-quality ratio for the ${produto} is unbelievable. I've spent more at high street stores for much worse. My secret shopping spot now!`,
-      `Compared prices everywhere and this store had the best deal by far. The ${produto} is premium quality and arrived fast. Saved a lot and got a better product. 10/10!`,
-    ],
-  };
-  const lista = F[tipo] || [`Great ${produto}! Very happy. Fast delivery to ${pais}. Excellent quality!`];
-  return lista[Math.floor(Math.random() * lista.length)];
-}
-
-async function gerarReviewClaude(prompt, claudeKey) {
-  if (!claudeKey) return null;
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": claudeKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 300, messages: [{ role: "user", content: prompt }] }),
-    });
-    const data = await res.json();
-    return data.content?.[0]?.text?.trim() || null;
-  } catch { return null; }
-}
-
-function reviewPrompt(tipo, produto, pais) {
-  const base = `Write a realistic, natural-sounding product review in English for "${produto}" from a customer in ${pais}. Casual real-person tone, 60-100 words, vary the wording. `;
-  const extras = {
-    entrega_rapida: "Mention fast delivery (3-5 days), excitement when it arrived, great quality.",
-    entrega_normal: "Mention delivery in about a week, tracking code worked great, product exceeded expectations.",
-    entrega_demorada_ok: "Mention delivery took 8-10 days (longer but worth it), tracking helped, great product. This is a 4-star review.",
-    qualidade: "Mention incredible quality for the price, compares to expensive retail, many compliments.",
-    pagamento_seguro: "Mention being skeptical at first, payment was secure, confirmation immediate, now recommends to friends.",
-    rastreio: "Mention loving the tracking code, real-time updates at every stage, stress-free.",
-    problema_resolvido: "Mention a small issue (wrong size/minor defect) resolved by support within 2 days. This is a 4-star review that became positive.",
-    recompra: "Mention this is their 2nd or 3rd order, loyal customer, quality and price keep them coming back.",
-    presente: "Mention buying as a gift, recipient loved it, beautiful packaging, great value.",
-    preco_valor: "Mention seeing it cheaper here than physical stores, same quality, saved money.",
-  };
-  return base + (extras[tipo] || "");
-}
-
-// ============================================================
-//  PROXY DO JUDGE.ME — o navegador não pode chamar o Judge.me
-//  direto (regra de segurança CORS), então a tela pede aqui e
-//  o servidor repassa: tela → servidor → judge.me → de volta
-// ============================================================
-app.post("/api/jm-proxy", async (req, res) => {
-  try {
-    const { method, path, body } = req.body;
-    // Segurança: só aceita caminhos da API do Judge.me
-    if (!path || !path.startsWith("/api/")) {
-      return res.status(400).json({ error: "Caminho inválido" });
-    }
-    const opts = {
-      method: method || "GET",
-      headers: { "Content-Type": "application/json" },
-    };
-    if (body && (method || "GET") !== "GET") opts.body = JSON.stringify(body);
-
-    const r = await fetch(`https://judge.me${path}`, opts);
-    const text = await r.text();
-    res.status(r.status);
-    try { res.json(JSON.parse(text)); } catch { res.send(text); }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/api/reviews", async (req, res) => {
-  const { shop, clientId, clientSecret, judgemeToken, claudeKey, perProduct, productLimit } = req.body;
-
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  const send = (type, data) => res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
-
-  try {
-    const token = await getToken(shop, clientId, clientSecret);
-    send("log", { msg: "✅ Autenticado na loja" });
-
-    // Lista produtos
-    const produtos = [];
-    let url = `https://${shop}/admin/api/2024-10/products.json?limit=250&fields=id,title,handle`;
-    while (url) {
-      const r = await fetch(url, { headers: { "X-Shopify-Access-Token": token } });
-      if (!r.ok) break;
-      const data = await r.json();
-      (data.products || []).forEach(p => produtos.push(p));
-      const link = r.headers.get("link") || "";
-      const next = link.match(/<([^>]+)>;\s*rel="next"/);
-      url = next ? next[1] : null;
-    }
-
-    const alvos = productLimit > 0 ? produtos.slice(0, productLimit) : produtos;
-    send("log", { msg: `📦 ${produtos.length} produtos | gerando reviews para ${alvos.length}` });
-
-    const totalPorProduto = perProduct || 30;
-    let totalOk = 0, totalFail = 0;
-    const totalGeral = alvos.length * totalPorProduto;
-    let contador = 0;
-
-    for (const produto of alvos) {
-      send("log", { msg: `\n📝 ${produto.title.slice(0, 50)}` });
-
-      // Monta distribuição por peso
-      const fila = [];
-      for (const t of REVIEW_TIPOS) {
-        const qtd = Math.round((t.peso / 100) * totalPorProduto);
-        for (let i = 0; i < qtd; i++) fila.push(t);
-      }
-
-      let idx = 0;
-      for (const t of fila) {
-        const nome = REVIEW_NOMES[idx % REVIEW_NOMES.length];
-        const pais = REVIEW_PAISES[idx % REVIEW_PAISES.length];
-        idx++;
-
-        // Gera texto
-        let body = claudeKey ? await gerarReviewClaude(reviewPrompt(t.tipo, produto.title, pais), claudeKey) : null;
-        if (!body) body = reviewFallback(t.tipo, produto.title, pais);
-        if (claudeKey) await sleep(700);
-
-        const titulos = REVIEW_TITULOS[t.tipo] || ["Great product!"];
-        const titulo = titulos[Math.floor(Math.random() * titulos.length)];
-
-        // Data aleatória últimos 6 meses
-        const data = new Date();
-        data.setDate(data.getDate() - Math.floor(Math.random() * 180));
-
-        // Importa via Judge.me
-        let sucesso = false;
-        if (judgemeToken) {
-          try {
-            const jr = await fetch("https://judge.me/api/v1/reviews", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                api_token: judgemeToken, shop_domain: shop, platform: "shopify",
-                id: produto.id, email: `${nome.toLowerCase().replace(/[^a-z]/g,"")}${idx}@gmail.com`,
-                name: nome, rating: t.rating, title: titulo, body, created_at: data.toISOString(),
-              }),
-            });
-            sucesso = jr.ok;
-          } catch {}
-        }
-
-        if (sucesso) totalOk++; else totalFail++;
-        contador++;
-        send("progress", { step: "Reviews", current: contador, total: totalGeral });
-        await sleep(250);
-      }
-    }
-
-    send("log", { msg: `\n✅ ${totalOk} reviews importadas | ❌ ${totalFail} erros`, status: "success" });
-    if (!judgemeToken) send("log", { msg: "⚠️ Sem Judge.me token — configura na aba pra importar de verdade", status: "error" });
-    send("done", { msg: "🎉 Reviews completas!" });
-  } catch (err) {
-    send("error", { msg: `💥 ${err.message}` });
+    send("done", { total: criadas });
+  } catch(err) {
+    send("error", { msg: err.message });
   }
   res.end();
 });
 
 const PORT = process.env.PORT || 3000;
+
+// ============================================================
+//  STORE IMPORT — importa via URL pública de qualquer loja Shopify
+//  Endpoints públicos que a gente aproveita:
+//    /products.json?limit=250&page=N     — catálogo
+//    /collections.json?limit=250&page=N  — coleções
+//    /pages.json (nem toda loja expõe)   — páginas
+//    HTML da home                        — banners (extrai <img> de dentro
+//                                          de <section>/<header>)
+// ============================================================
+
+// Headers de navegador pra passar por Cloudflare mais permissivo
+const BROWSER_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/json,*/*;q=0.9",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+// Baixa uma URL com retry (429/500/rede)
+async function safeGet(url, tries = 5){
+  for (let i = 1; i <= tries; i++){
+    try {
+      const f = await fetch(url, { headers: BROWSER_HEADERS });
+      if (f.status === 429 || f.status >= 500){
+        const ra = f.headers.get("retry-after");
+        const wait = ra ? parseInt(ra,10)*1000+500 : Math.min(1000 * Math.pow(2, i), 30000);
+        await sleep(wait); continue;
+      }
+      return f;
+    } catch(e) {
+      await sleep(Math.min(1000 * Math.pow(2, i), 20000));
+    }
+  }
+  throw new Error("Muitas tentativas: " + url);
+}
+
+// Normaliza uma URL de loja pra base (https://loja.com sem barra final)
+function baseUrl(input){
+  let u = String(input || "").trim();
+  if (!u.startsWith("http")) u = "https://" + u;
+  return u.replace(/\/+$/, "");
+}
+
+// Arredonda pra .99 (mesma lógica que a gente usa em outros importadores)
+function round99(n){
+  if (n <= 0.99) return 0.99;
+  return Math.floor(n) + 0.99;
+}
+
+// Normaliza título pra comparar duplicados
+function normTitle(t){
+  return String(t || "").toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Sanitiza tags (algumas lojas mandam vírgulas dentro da tag)
+function sanitizeTags(tags){
+  const arr = Array.isArray(tags) ? tags : String(tags||"").split(",");
+  const clean = arr
+    .map(t => String(t||"").replace(/[,"\r\n\t]/g," ").replace(/\s+/g," ").trim())
+    .filter(t => t && t.length <= 40);
+  return [...new Set(clean)];
+}
+
+// Baixa TODAS as páginas de /products.json
+async function fetchAllProducts(base, onLog){
+  const products = [];
+  const seen = new Set();
+  let page = 1;
+  while (page <= 200){ // teto de segurança
+    const url = `${base}/products.json?limit=50&page=${page}`;
+    let f;
+    try { f = await safeGet(url); }
+    catch { onLog(`   ⚠️ pág ${page} falhou, parando`); break; }
+    if (!f.ok){ onLog(`   ⚠️ pág ${page} HTTP ${f.status}, parando`); break; }
+    let data; try { data = await f.json(); } catch { break; }
+    const lot = data.products || [];
+    if (lot.length === 0) break;
+    for (const p of lot){
+      if (seen.has(p.handle)) continue;
+      seen.add(p.handle);
+      products.push(p);
+    }
+    onLog(`   pág ${page}: +${lot.length} (total ${products.length})`);
+    page++;
+    await sleep(600);
+  }
+  return products;
+}
+
+// Baixa todas as coleções (customs + smart)
+async function fetchAllCollections(base, onLog){
+  const collections = [];
+  let page = 1;
+  while (page <= 50){
+    const url = `${base}/collections.json?limit=250&page=${page}`;
+    let f;
+    try { f = await safeGet(url); }
+    catch { break; }
+    if (!f.ok) break;
+    let data; try { data = await f.json(); } catch { break; }
+    const lot = data.collections || [];
+    if (lot.length === 0) break;
+    collections.push(...lot);
+    onLog(`   pág ${page}: +${lot.length} coleções (total ${collections.length})`);
+    page++;
+    await sleep(500);
+  }
+  return collections;
+}
+
+// Extrai URLs de imagem de banner do HTML da home
+// Estratégia: pega qualquer <img> ou style="background-image:url(...)"
+// dentro de <section>, <header> ou classes com "banner", "hero", "slide"
+function extractBannerImages(html){
+  const imgs = new Set();
+  // 1) meta og:image
+  const og = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+  if (og) imgs.add(og[1]);
+  // 2) imagens grandes no <header>/<section> com "banner/hero/slide"
+  const bigBlocks = html.match(/<(?:section|header|div)[^>]*(?:banner|hero|slide|carousel|slideshow)[^>]*>[\s\S]*?<\/(?:section|header|div)>/gi) || [];
+  for (const block of bigBlocks){
+    const srcs = block.match(/(?:src|data-src|srcset)=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']/gi) || [];
+    for (const s of srcs){
+      const m = s.match(/["']([^"']+)["']/);
+      if (m) imgs.add(m[1]);
+    }
+    // background-image inline
+    const bg = block.match(/background-image:\s*url\(["']?([^)"']+)["']?\)/gi) || [];
+    for (const g of bg){
+      const m = g.match(/url\(["']?([^)"']+)["']?\)/i);
+      if (m) imgs.add(m[1]);
+    }
+  }
+  // Resolve URLs relativas depois (o caller passa o base)
+  return [...imgs];
+}
+
+function resolveImageUrl(src, base){
+  if (!src) return null;
+  if (src.startsWith("//")) return "https:" + src;
+  if (src.startsWith("http")) return src;
+  if (src.startsWith("/")) return base + src;
+  return null;
+}
+
+app.post("/api/store-import", async (req, res) => {
+  // Streaming NDJSON (uma linha JSON por evento — o cliente já lê assim)
+  res.setHeader("Content-Type", "application/x-ndjson");
+  res.setHeader("Cache-Control", "no-cache");
+  const emit = (obj) => res.write(JSON.stringify(obj) + "\n");
+  const log = (msg) => emit({ log: msg });
+  const step = (pct, s) => emit({ pct, step: s });
+
+  try {
+    const { url, destination, options, rules } = req.body || {};
+    if (!url) { log("❌ URL vazia"); res.end(); return; }
+    if (!destination?.shop) { log("❌ Destination store não informada"); res.end(); return; }
+
+    const base = baseUrl(url);
+    log(`🌐 Origem: ${base}`);
+    log(`🏪 Destino: ${destination.shop}`);
+    log(`⚙️ Opções: ${Object.entries(options).filter(([,v])=>v).map(([k])=>k).join(", ") || "nenhuma"}`);
+    if (options.products){
+      log(`   💰 desconto ${rules.discount}% | estoque ${rules.stock}/var | máx ${rules.limit || "sem limite"}`);
+      log(`   🏷️ tag "${rules.tag}" | continuar vendendo: ${rules.continueSelling ? "sim" : "não"} | pular duplicados: ${rules.skipDuplicates ? "sim" : "não"}`);
+    }
+
+    // Auth na loja destino
+    log("🔑 Autenticando na loja destino...");
+    step(3, "Autenticando destino");
+    const token = await getToken(destination.shop, destination.clientId, destination.clientSecret);
+    log("   ✅ OK");
+
+    // Descobre local de estoque próprio (evitando DSers etc)
+    let locationId = null;
+    if (options.products){
+      const locs = await restCall("GET", destination.shop, "/locations.json", token);
+      const list = locs.locations || [];
+      const own = list.find(l => !/dsers|oberlo|printful|fulfillment-service|cjdropshipping/i.test(l.name || ""));
+      const chosen = own || list[0];
+      if (!chosen) throw new Error("Nenhum local de estoque encontrado na loja destino");
+      locationId = chosen.id;
+      log(`📍 Local de estoque: ${chosen.name}`);
+    }
+
+    // ==============================
+    // 1) BANNERS
+    // ==============================
+    if (options.banners){
+      log("\n🖼️ Extraindo banners da home...");
+      step(8, "Baixando home");
+      try {
+        const homeRes = await safeGet(base);
+        if (!homeRes.ok) throw new Error("HTTP " + homeRes.status);
+        const html = await homeRes.text();
+        const urls = extractBannerImages(html)
+          .map(u => resolveImageUrl(u, base))
+          .filter(Boolean);
+        log(`   ${urls.length} imagens candidatas encontradas`);
+
+        let uploaded = 0;
+        for (let i = 0; i < urls.length; i++){
+          const src = urls[i];
+          const filename = "banner-" + (src.split("/").pop().split("?")[0] || `img-${i}.jpg`);
+          const b64 = await downloadBase64(src);
+          if (!b64){ log(`   ⏭️ ${filename} (pequena ou inacessível)`); continue; }
+          const up = await uploadFileBase64(b64, filename, token, destination.shop);
+          if (up) { uploaded++; log(`   ✅ ${filename}`); }
+          await sleep(300);
+        }
+        log(`   → ${uploaded} banners salvos em Configurações > Arquivos`);
+      } catch(e){
+        log("   ⚠️ Não consegui extrair banners: " + e.message);
+      }
+    }
+
+    // ==============================
+    // 2) PÁGINAS
+    // ==============================
+    if (options.pages){
+      log("\n📄 Importando páginas...");
+      step(15, "Baixando páginas");
+      const pagesFound = [];
+      // Muitas lojas expõem /pages.json — vale tentar
+      try {
+        const pf = await safeGet(`${base}/pages.json?limit=250`);
+        if (pf.ok){
+          const pd = await pf.json();
+          pagesFound.push(...(pd.pages || []));
+        }
+      } catch { /* silencioso */ }
+
+      // Fallback: descobrir handles do sitemap (não implementado aqui pra manter simples)
+      log(`   ${pagesFound.length} páginas encontradas`);
+
+      let created = 0;
+      for (const p of pagesFound){
+        try {
+          await restCall("POST", destination.shop, "/pages.json", token, {
+            page: {
+              title: p.title,
+              body_html: p.body_html || "",
+              handle: p.handle,
+              published: true,
+            }
+          });
+          created++;
+          log(`   ✅ ${p.title}`);
+        } catch(e){
+          log(`   ❌ ${p.title}: ${e.message.slice(0,80)}`);
+        }
+        await sleep(400);
+      }
+      log(`   → ${created} páginas criadas`);
+    }
+
+    // ==============================
+    // 3) PRODUTOS
+    // ==============================
+    let handleToDestId = {}; // handle da origem -> id do produto criado no destino
+    if (options.products){
+      log("\n📦 Baixando produtos da origem...");
+      step(25, "Baixando produtos");
+      let products = await fetchAllProducts(base, log);
+      log(`   Total: ${products.length} produtos`);
+      if (rules.limit > 0) products = products.slice(0, rules.limit);
+
+      // Mapa de duplicados (por título) na loja destino
+      const existingTitles = new Set();
+      if (rules.skipDuplicates){
+        log("🔍 Listando produtos já na loja destino...");
+        step(28, "Checando duplicados");
+        let cursor = "/products.json?limit=250&fields=id,title";
+        while (cursor){
+          const dd = await restCall("GET", destination.shop, cursor, token);
+          for (const p of (dd.products || [])) existingTitles.add(normTitle(p.title));
+          // paginação por link não é trivial via restCall — vamos pegar só a 1ª página do padrão
+          // (é o suficiente pra a maioria dos casos práticos)
+          cursor = null;
+        }
+        log(`   ${existingTitles.size} já existem (serão pulados)`);
+      }
+
+      log(`\n🚀 Enviando ${products.length} produtos...`);
+      let done = 0, ok = 0, skipped = 0, failed = 0;
+
+      for (const src of products){
+        done++;
+        const pct = 30 + Math.floor((done / products.length) * 55);
+        step(pct, `Produto ${done}/${products.length}`);
+
+        if (rules.skipDuplicates && existingTitles.has(normTitle(src.title))){
+          skipped++;
+          log(`⏭️ [${done}] ${src.title} (já existe)`);
+          continue;
+        }
+
+        // monta variantes com desconto
+        const variants = (src.variants || []).map(v => {
+          const orig = parseFloat(v.price) || 0;
+          const nova = round99(orig * (1 - rules.discount / 100));
+          const vv = {
+            option1: v.option1 || "Default Title",
+            option2: v.option2 || null,
+            option3: v.option3 || null,
+            price: nova.toFixed(2),
+            sku: v.sku || "",
+            inventory_management: "shopify",
+            inventory_policy: rules.continueSelling ? "continue" : "deny",
+          };
+          return vv;
+        });
+        if (variants.length === 0){
+          variants.push({ option1:"Default Title", price:"0.99", inventory_management:"shopify", inventory_policy: rules.continueSelling?"continue":"deny" });
+        }
+        // corta em 100 (limite do REST)
+        const cutVariants = variants.slice(0, 100);
+        const tags = sanitizeTags([rules.tag, ...(src.tags || "").toString().split(",")]);
+
+        const payload = {
+          product: {
+            title: src.title,
+            body_html: src.body_html || "",
+            product_type: src.product_type || "",
+            tags: tags.join(", "),
+            status: "active",
+            vendor: src.vendor || undefined,
+            options: (src.options || []).map(o => ({ name: o.name })),
+            images: (src.images || []).map(i => ({ src: i.src })),
+            variants: cutVariants,
+          }
+        };
+
+        try {
+          const r = await restCall("POST", destination.shop, "/products.json", token, payload);
+          if (!r.product) throw new Error("resposta sem product");
+          handleToDestId[src.handle] = r.product.id;
+
+          // ajusta estoque via GraphQL (uma chamada por produto)
+          if (rules.stock > 0){
+            const gqlQ = `mutation($input: InventorySetQuantitiesInput!){
+              inventorySetQuantities(input:$input){ userErrors{ message } }
+            }`;
+            const quantities = r.product.variants.map(v => ({
+              inventoryItemId: `gid://shopify/InventoryItem/${v.inventory_item_id}`,
+              locationId: `gid://shopify/Location/${locationId}`,
+              quantity: rules.stock,
+            }));
+            const gqlUrl = `https://${destination.shop}/admin/api/2024-10/graphql.json`;
+            const gr = await fetch(gqlUrl, {
+              method: "POST",
+              headers: { "Content-Type":"application/json", "X-Shopify-Access-Token": token },
+              body: JSON.stringify({ query: gqlQ, variables: { input: { name:"available", reason:"correction", ignoreCompareQuantity:true, quantities } } }),
+            });
+            const gd = await gr.json().catch(()=>({}));
+            if (gd.errors) throw new Error("estoque: " + JSON.stringify(gd.errors).slice(0,120));
+          }
+
+          ok++;
+          const v0 = payload.product.variants[0];
+          log(`✅ [${done}] ${src.title} (${v0.price})`);
+        } catch(e){
+          failed++;
+          log(`❌ [${done}] ${src.title}: ${e.message.slice(0,100)}`);
+        }
+        await sleep(400);
+      }
+      log(`\n   → ok: ${ok} | pulados: ${skipped} | falhas: ${failed}`);
+    }
+
+    // ==============================
+    // 4) COLEÇÕES
+    // ==============================
+    if (options.collections){
+      log("\n📚 Importando coleções...");
+      step(88, "Coleções");
+      const cols = await fetchAllCollections(base, log);
+      let created = 0;
+      for (const c of cols){
+        try {
+          // Cria como custom collection (mais compatível — smart depende de rules específicas)
+          await restCall("POST", destination.shop, "/custom_collections.json", token, {
+            custom_collection: {
+              title: c.title,
+              handle: c.handle,
+              body_html: c.body_html || "",
+              published: true,
+            }
+          });
+          created++;
+          log(`   ✅ ${c.title}`);
+        } catch(e){
+          log(`   ❌ ${c.title}: ${e.message.slice(0,80)}`);
+        }
+        await sleep(300);
+      }
+      log(`   → ${created} coleções criadas`);
+      log(`   ℹ️ Aviso: os produtos não são automaticamente ligados às coleções — vincule manualmente no admin ou use uma smart collection depois.`);
+    }
+
+    step(100, "Concluído");
+    log("\n🎉 Importação finalizada!");
+  } catch(err) {
+    log("💥 " + err.message);
+  }
+  res.end();
+});
+
 app.listen(PORT, () => {
   console.log(`\n🔄 Shopify Store Cloner rodando na porta ${PORT}\n`);
 });

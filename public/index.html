@@ -160,6 +160,7 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 <div class="tabs-wrap">
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab('clone')">🔄 Clone Store</button>
+    <button class="tab-btn" onclick="switchTab('storeimport')">🌐 Store Import</button>
     <button class="tab-btn" onclick="switchTab('reviews')">⭐ Reviews Generator</button>
     <button class="tab-btn" onclick="switchTab('scopes')">🔑 API Scopes</button>
     <button class="tab-btn" onclick="switchTab('reset')">🗑️ Resetar</button>
@@ -270,7 +271,75 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
     </div>
   </div>
 
+  <!-- TAB STORE IMPORT — importa via URL pública (sem credenciais da loja de origem) -->
+  <div id="tab-storeimport" style="display:none">
+    <div class="card">
+      <div class="card-header">
+        <h3>🌐 Store Import via URL</h3>
+        <p>Importa produtos, coleções, páginas e imagens de banner de qualquer loja Shopify usando só a URL pública (sem precisar de credenciais da loja de origem).</p>
+      </div>
+      <div class="card-body">
+
+        <div class="field">
+          <label>URL da Loja de Origem</label>
+          <input id="si-url" placeholder="Ex: https://babyboo.com  ou  https://loja.myshopify.com">
+        </div>
+
+        <p style="font-size:12px;color:var(--text3);margin:6px 0 18px">
+          💡 A loja destino usa as credenciais da <b>Destination Store</b> preenchidas na aba Clone Store.
+        </p>
+
+        <div style="font-size:13px;font-weight:600;margin:14px 0 10px">📋 O que importar</div>
+        <div class="options-grid">
+          <label class="option-item"><input type="checkbox" id="si-opt-products" checked> Produtos</label>
+          <label class="option-item"><input type="checkbox" id="si-opt-collections" checked> Coleções</label>
+          <label class="option-item"><input type="checkbox" id="si-opt-pages" checked> Páginas</label>
+          <label class="option-item"><input type="checkbox" id="si-opt-banners" checked> 🖼️ Banners da Home</label>
+        </div>
+
+        <!-- Filtros e regras -->
+        <div id="si-rules" style="margin-top:14px;padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--bg)">
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px">💰 Regras de preço &amp; estoque (para produtos)</div>
+
+          <div style="display:flex;gap:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:160px">
+              <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px">Desconto no preço (%)</label>
+              <input type="number" id="si-discount" value="25" min="0" max="90" step="1" style="width:100%;padding:9px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box">
+            </div>
+            <div style="flex:1;min-width:160px">
+              <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px">Estoque por variante</label>
+              <input type="number" id="si-stock" value="100" min="0" step="10" style="width:100%;padding:9px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box">
+            </div>
+            <div style="flex:1;min-width:160px">
+              <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px">Máx. produtos (0 = todos)</label>
+              <input type="number" id="si-limit" value="0" min="0" step="10" style="width:100%;padding:9px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box">
+            </div>
+          </div>
+
+          <div style="margin-top:12px;display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+            <label class="option-item" style="flex:1;min-width:180px"><input type="checkbox" id="si-opt-continue-selling" checked> Continuar vendendo sem estoque</label>
+            <label class="option-item" style="flex:1;min-width:180px"><input type="checkbox" id="si-opt-skip-duplicates" checked> Pular duplicados (por título)</label>
+          </div>
+
+          <div style="margin-top:12px">
+            <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px">Tag de importação (para achar/apagar depois)</label>
+            <input id="si-tag" value="store-import" style="width:100%;padding:9px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box">
+          </div>
+        </div>
+
+        <button class="btn btn-primary" id="btn-si-start" onclick="startStoreImport()" style="margin-top:16px">🚀 Importar da URL</button>
+
+        <div class="progress-wrap" id="si-progress-wrap" style="display:none;margin-top:16px">
+          <div class="progress-label"><span id="si-progress-step">Preparing...</span><span id="si-progress-pct">0%</span></div>
+          <div class="progress-bar-bg"><div class="progress-bar-fill" id="si-progress-bar"></div></div>
+          <div class="log-area" id="si-log-area" style="margin-top:12px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- TAB REVIEWS -->
+  <div id="tab-reviews" style="display:none">
   <div id="tab-reviews" style="display:none">
     <div class="card">
       <div class="card-header"><h3>⭐ Judge.me Reviews Generator</h3><p>Fetch products randomly from your store and create realistic reviews automatically</p></div>
@@ -358,9 +427,10 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 <script>
 function switchTab(tab) {
   if (document.getElementById('tab-reset')) document.getElementById('tab-reset').style.display = tab==='reset'?'block':'none';
-  const map={clone:0,reviews:1,scopes:2,reset:3};
+  const map={clone:0,storeimport:1,reviews:2,scopes:3,reset:4};
   document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active',i===map[tab]));
   document.getElementById('tab-clone').style.display = tab==='clone'?'block':'none';
+  document.getElementById('tab-storeimport').style.display = tab==='storeimport'?'block':'none';
   document.getElementById('tab-reviews').style.display = tab==='reviews'?'block':'none';
   document.getElementById('tab-scopes').style.display = tab==='scopes'?'block':'none';
 }
@@ -646,6 +716,94 @@ async function startReviews() {
   btn.disabled=false;btn.textContent='⭐ Generate Reviews';
 }
 function rvLog(msg){const el=document.getElementById('rv-log-area');const d=document.createElement('div');d.className='log-line';d.textContent=msg;el.appendChild(d);el.scrollTop=el.scrollHeight;}
+
+// ============================================================
+//  STORE IMPORT — importa via URL pública (streaming SSE)
+// ============================================================
+function siLog(msg){
+  const el=document.getElementById('si-log-area');
+  const d=document.createElement('div');
+  d.className='log-line';d.textContent=msg;
+  el.appendChild(d);el.scrollTop=el.scrollHeight;
+}
+function siProgress(pct, step){
+  document.getElementById('si-progress-bar').style.width = pct + '%';
+  document.getElementById('si-progress-pct').textContent = Math.round(pct) + '%';
+  if (step) document.getElementById('si-progress-step').textContent = step;
+}
+async function startStoreImport(){
+  const url = document.getElementById('si-url').value.trim();
+  if (!url){ alert('Cole a URL da loja de origem'); return; }
+  const destination = getStoreData('dest');
+  if (!destination.shop || !destination.clientId || !destination.clientSecret){
+    alert('Preencha as credenciais da Destination Store (aba Clone Store) primeiro.');
+    return;
+  }
+
+  const payload = {
+    url,
+    destination,
+    options: {
+      products:    document.getElementById('si-opt-products').checked,
+      collections: document.getElementById('si-opt-collections').checked,
+      pages:       document.getElementById('si-opt-pages').checked,
+      banners:     document.getElementById('si-opt-banners').checked,
+    },
+    rules: {
+      discount:        Number(document.getElementById('si-discount').value) || 0,
+      stock:           Number(document.getElementById('si-stock').value) || 0,
+      limit:           Number(document.getElementById('si-limit').value) || 0,
+      continueSelling: document.getElementById('si-opt-continue-selling').checked,
+      skipDuplicates:  document.getElementById('si-opt-skip-duplicates').checked,
+      tag:             (document.getElementById('si-tag').value.trim() || 'store-import'),
+    },
+  };
+
+  const btn = document.getElementById('btn-si-start');
+  btn.disabled = true;
+  btn.textContent = '⏳ Importando...';
+  document.getElementById('si-progress-wrap').style.display = 'block';
+  document.getElementById('si-log-area').innerHTML = '';
+  siProgress(0, 'Iniciando...');
+
+  try {
+    const res = await fetch('/api/store-import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok){
+      const txt = await res.text();
+      siLog('💥 Erro: ' + txt.slice(0, 300));
+      return;
+    }
+    // Lê stream de eventos (SSE — o server manda linha por linha)
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true){
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // guarda a última linha incompleta
+      for (const line of lines){
+        if (!line.trim()) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev.log) siLog(ev.log);
+          if (typeof ev.pct === 'number') siProgress(ev.pct, ev.step);
+        } catch { /* linha não-JSON, ignora */ }
+      }
+    }
+    siLog('✅ Fim.');
+  } catch(err){
+    siLog('💥 ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🚀 Importar da URL';
+  }
+}
 </script>
 </body>
 </html>
