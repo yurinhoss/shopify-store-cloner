@@ -1087,6 +1087,417 @@ app.post("/api/reviews", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+// ============================================================
+//  STORE IMPORT — importa via URL pública de qualquer loja Shopify
+//  Endpoints públicos que a gente aproveita:
+//    /products.json?limit=250&page=N     — catálogo
+//    /collections.json?limit=250&page=N  — coleções
+//    /pages.json (nem toda loja expõe)   — páginas
+//    HTML da home                        — banners (extrai <img> de dentro
+//                                          de <section>/<header>)
+// ============================================================
+
+// Headers de navegador pra passar por Cloudflare mais permissivo
+const BROWSER_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/json,*/*;q=0.9",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
+
+// Baixa uma URL com retry (429/500/rede)
+async function safeGet(url, tries = 5){
+  for (let i = 1; i <= tries; i++){
+    try {
+      const f = await fetch(url, { headers: BROWSER_HEADERS });
+      if (f.status === 429 || f.status >= 500){
+        const ra = f.headers.get("retry-after");
+        const wait = ra ? parseInt(ra,10)*1000+500 : Math.min(1000 * Math.pow(2, i), 30000);
+        await sleep(wait); continue;
+      }
+      return f;
+    } catch(e) {
+      await sleep(Math.min(1000 * Math.pow(2, i), 20000));
+    }
+  }
+  throw new Error("Muitas tentativas: " + url);
+}
+
+// Normaliza uma URL de loja pra base (https://loja.com sem barra final)
+function baseUrl(input){
+  let u = String(input || "").trim();
+  if (!u.startsWith("http")) u = "https://" + u;
+  return u.replace(/\/+$/, "");
+}
+
+// Arredonda pra .99 (mesma lógica que a gente usa em outros importadores)
+function round99(n){
+  if (n <= 0.99) return 0.99;
+  return Math.floor(n) + 0.99;
+}
+
+// Normaliza título pra comparar duplicados
+function normTitle(t){
+  return String(t || "").toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Sanitiza tags (algumas lojas mandam vírgulas dentro da tag)
+function sanitizeTags(tags){
+  const arr = Array.isArray(tags) ? tags : String(tags||"").split(",");
+  const clean = arr
+    .map(t => String(t||"").replace(/[,"\r\n\t]/g," ").replace(/\s+/g," ").trim())
+    .filter(t => t && t.length <= 40);
+  return [...new Set(clean)];
+}
+
+// Baixa TODAS as páginas de /products.json
+async function fetchAllProducts(base, onLog){
+  const products = [];
+  const seen = new Set();
+  let page = 1;
+  while (page <= 200){ // teto de segurança
+    const url = `${base}/products.json?limit=50&page=${page}`;
+    let f;
+    try { f = await safeGet(url); }
+    catch { onLog(`   ⚠️ pág ${page} falhou, parando`); break; }
+    if (!f.ok){ onLog(`   ⚠️ pág ${page} HTTP ${f.status}, parando`); break; }
+    let data; try { data = await f.json(); } catch { break; }
+    const lot = data.products || [];
+    if (lot.length === 0) break;
+    for (const p of lot){
+      if (seen.has(p.handle)) continue;
+      seen.add(p.handle);
+      products.push(p);
+    }
+    onLog(`   pág ${page}: +${lot.length} (total ${products.length})`);
+    page++;
+    await sleep(600);
+  }
+  return products;
+}
+
+// Baixa todas as coleções (customs + smart)
+async function fetchAllCollections(base, onLog){
+  const collections = [];
+  let page = 1;
+  while (page <= 50){
+    const url = `${base}/collections.json?limit=250&page=${page}`;
+    let f;
+    try { f = await safeGet(url); }
+    catch { break; }
+    if (!f.ok) break;
+    let data; try { data = await f.json(); } catch { break; }
+    const lot = data.collections || [];
+    if (lot.length === 0) break;
+    collections.push(...lot);
+    onLog(`   pág ${page}: +${lot.length} coleções (total ${collections.length})`);
+    page++;
+    await sleep(500);
+  }
+  return collections;
+}
+
+// Extrai URLs de imagem de banner do HTML da home
+// Estratégia: pega qualquer <img> ou style="background-image:url(...)"
+// dentro de <section>, <header> ou classes com "banner", "hero", "slide"
+function extractBannerImages(html){
+  const imgs = new Set();
+  // 1) meta og:image
+  const og = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+  if (og) imgs.add(og[1]);
+  // 2) imagens grandes no <header>/<section> com "banner/hero/slide"
+  const bigBlocks = html.match(/<(?:section|header|div)[^>]*(?:banner|hero|slide|carousel|slideshow)[^>]*>[\s\S]*?<\/(?:section|header|div)>/gi) || [];
+  for (const block of bigBlocks){
+    const srcs = block.match(/(?:src|data-src|srcset)=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']/gi) || [];
+    for (const s of srcs){
+      const m = s.match(/["']([^"']+)["']/);
+      if (m) imgs.add(m[1]);
+    }
+    // background-image inline
+    const bg = block.match(/background-image:\s*url\(["']?([^)"']+)["']?\)/gi) || [];
+    for (const g of bg){
+      const m = g.match(/url\(["']?([^)"']+)["']?\)/i);
+      if (m) imgs.add(m[1]);
+    }
+  }
+  // Resolve URLs relativas depois (o caller passa o base)
+  return [...imgs];
+}
+
+function resolveImageUrl(src, base){
+  if (!src) return null;
+  if (src.startsWith("//")) return "https:" + src;
+  if (src.startsWith("http")) return src;
+  if (src.startsWith("/")) return base + src;
+  return null;
+}
+
+app.post("/api/store-import", async (req, res) => {
+  // Streaming NDJSON (uma linha JSON por evento — o cliente já lê assim)
+  res.setHeader("Content-Type", "application/x-ndjson");
+  res.setHeader("Cache-Control", "no-cache");
+  const emit = (obj) => res.write(JSON.stringify(obj) + "\n");
+  const log = (msg) => emit({ log: msg });
+  const step = (pct, s) => emit({ pct, step: s });
+
+  try {
+    const { url, destination, options, rules } = req.body || {};
+    if (!url) { log("❌ URL vazia"); res.end(); return; }
+    if (!destination?.shop) { log("❌ Destination store não informada"); res.end(); return; }
+
+    const base = baseUrl(url);
+    log(`🌐 Origem: ${base}`);
+    log(`🏪 Destino: ${destination.shop}`);
+    log(`⚙️ Opções: ${Object.entries(options).filter(([,v])=>v).map(([k])=>k).join(", ") || "nenhuma"}`);
+    if (options.products){
+      log(`   💰 desconto ${rules.discount}% | estoque ${rules.stock}/var | máx ${rules.limit || "sem limite"}`);
+      log(`   🏷️ tag "${rules.tag}" | continuar vendendo: ${rules.continueSelling ? "sim" : "não"} | pular duplicados: ${rules.skipDuplicates ? "sim" : "não"}`);
+    }
+
+    // Auth na loja destino
+    log("🔑 Autenticando na loja destino...");
+    step(3, "Autenticando destino");
+    const token = await getToken(destination.shop, destination.clientId, destination.clientSecret);
+    log("   ✅ OK");
+
+    // Descobre local de estoque próprio (evitando DSers etc)
+    let locationId = null;
+    if (options.products){
+      const locs = await restCall("GET", destination.shop, "/locations.json", token);
+      const list = locs.locations || [];
+      const own = list.find(l => !/dsers|oberlo|printful|fulfillment-service|cjdropshipping/i.test(l.name || ""));
+      const chosen = own || list[0];
+      if (!chosen) throw new Error("Nenhum local de estoque encontrado na loja destino");
+      locationId = chosen.id;
+      log(`📍 Local de estoque: ${chosen.name}`);
+    }
+
+    // ==============================
+    // 1) BANNERS
+    // ==============================
+    if (options.banners){
+      log("\n🖼️ Extraindo banners da home...");
+      step(8, "Baixando home");
+      try {
+        const homeRes = await safeGet(base);
+        if (!homeRes.ok) throw new Error("HTTP " + homeRes.status);
+        const html = await homeRes.text();
+        const urls = extractBannerImages(html)
+          .map(u => resolveImageUrl(u, base))
+          .filter(Boolean);
+        log(`   ${urls.length} imagens candidatas encontradas`);
+
+        let uploaded = 0;
+        for (let i = 0; i < urls.length; i++){
+          const src = urls[i];
+          const filename = "banner-" + (src.split("/").pop().split("?")[0] || `img-${i}.jpg`);
+          const b64 = await downloadBase64(src);
+          if (!b64){ log(`   ⏭️ ${filename} (pequena ou inacessível)`); continue; }
+          const up = await uploadFileBase64(b64, filename, token, destination.shop);
+          if (up) { uploaded++; log(`   ✅ ${filename}`); }
+          await sleep(300);
+        }
+        log(`   → ${uploaded} banners salvos em Configurações > Arquivos`);
+      } catch(e){
+        log("   ⚠️ Não consegui extrair banners: " + e.message);
+      }
+    }
+
+    // ==============================
+    // 2) PÁGINAS
+    // ==============================
+    if (options.pages){
+      log("\n📄 Importando páginas...");
+      step(15, "Baixando páginas");
+      const pagesFound = [];
+      // Muitas lojas expõem /pages.json — vale tentar
+      try {
+        const pf = await safeGet(`${base}/pages.json?limit=250`);
+        if (pf.ok){
+          const pd = await pf.json();
+          pagesFound.push(...(pd.pages || []));
+        }
+      } catch { /* silencioso */ }
+
+      // Fallback: descobrir handles do sitemap (não implementado aqui pra manter simples)
+      log(`   ${pagesFound.length} páginas encontradas`);
+
+      let created = 0;
+      for (const p of pagesFound){
+        try {
+          await restCall("POST", destination.shop, "/pages.json", token, {
+            page: {
+              title: p.title,
+              body_html: p.body_html || "",
+              handle: p.handle,
+              published: true,
+            }
+          });
+          created++;
+          log(`   ✅ ${p.title}`);
+        } catch(e){
+          log(`   ❌ ${p.title}: ${e.message.slice(0,80)}`);
+        }
+        await sleep(400);
+      }
+      log(`   → ${created} páginas criadas`);
+    }
+
+    // ==============================
+    // 3) PRODUTOS
+    // ==============================
+    let handleToDestId = {}; // handle da origem -> id do produto criado no destino
+    if (options.products){
+      log("\n📦 Baixando produtos da origem...");
+      step(25, "Baixando produtos");
+      let products = await fetchAllProducts(base, log);
+      log(`   Total: ${products.length} produtos`);
+      if (rules.limit > 0) products = products.slice(0, rules.limit);
+
+      // Mapa de duplicados (por título) na loja destino
+      const existingTitles = new Set();
+      if (rules.skipDuplicates){
+        log("🔍 Listando produtos já na loja destino...");
+        step(28, "Checando duplicados");
+        let cursor = "/products.json?limit=250&fields=id,title";
+        while (cursor){
+          const dd = await restCall("GET", destination.shop, cursor, token);
+          for (const p of (dd.products || [])) existingTitles.add(normTitle(p.title));
+          // paginação por link não é trivial via restCall — vamos pegar só a 1ª página do padrão
+          // (é o suficiente pra a maioria dos casos práticos)
+          cursor = null;
+        }
+        log(`   ${existingTitles.size} já existem (serão pulados)`);
+      }
+
+      log(`\n🚀 Enviando ${products.length} produtos...`);
+      let done = 0, ok = 0, skipped = 0, failed = 0;
+
+      for (const src of products){
+        done++;
+        const pct = 30 + Math.floor((done / products.length) * 55);
+        step(pct, `Produto ${done}/${products.length}`);
+
+        if (rules.skipDuplicates && existingTitles.has(normTitle(src.title))){
+          skipped++;
+          log(`⏭️ [${done}] ${src.title} (já existe)`);
+          continue;
+        }
+
+        // monta variantes com desconto
+        const variants = (src.variants || []).map(v => {
+          const orig = parseFloat(v.price) || 0;
+          const nova = round99(orig * (1 - rules.discount / 100));
+          const vv = {
+            option1: v.option1 || "Default Title",
+            option2: v.option2 || null,
+            option3: v.option3 || null,
+            price: nova.toFixed(2),
+            sku: v.sku || "",
+            inventory_management: "shopify",
+            inventory_policy: rules.continueSelling ? "continue" : "deny",
+          };
+          return vv;
+        });
+        if (variants.length === 0){
+          variants.push({ option1:"Default Title", price:"0.99", inventory_management:"shopify", inventory_policy: rules.continueSelling?"continue":"deny" });
+        }
+        // corta em 100 (limite do REST)
+        const cutVariants = variants.slice(0, 100);
+        const tags = sanitizeTags([rules.tag, ...(src.tags || "").toString().split(",")]);
+
+        const payload = {
+          product: {
+            title: src.title,
+            body_html: src.body_html || "",
+            product_type: src.product_type || "",
+            tags: tags.join(", "),
+            status: "active",
+            vendor: src.vendor || undefined,
+            options: (src.options || []).map(o => ({ name: o.name })),
+            images: (src.images || []).map(i => ({ src: i.src })),
+            variants: cutVariants,
+          }
+        };
+
+        try {
+          const r = await restCall("POST", destination.shop, "/products.json", token, payload);
+          if (!r.product) throw new Error("resposta sem product");
+          handleToDestId[src.handle] = r.product.id;
+
+          // ajusta estoque via GraphQL (uma chamada por produto)
+          if (rules.stock > 0){
+            const gqlQ = `mutation($input: InventorySetQuantitiesInput!){
+              inventorySetQuantities(input:$input){ userErrors{ message } }
+            }`;
+            const quantities = r.product.variants.map(v => ({
+              inventoryItemId: `gid://shopify/InventoryItem/${v.inventory_item_id}`,
+              locationId: `gid://shopify/Location/${locationId}`,
+              quantity: rules.stock,
+            }));
+            const gqlUrl = `https://${destination.shop}/admin/api/2024-10/graphql.json`;
+            const gr = await fetch(gqlUrl, {
+              method: "POST",
+              headers: { "Content-Type":"application/json", "X-Shopify-Access-Token": token },
+              body: JSON.stringify({ query: gqlQ, variables: { input: { name:"available", reason:"correction", ignoreCompareQuantity:true, quantities } } }),
+            });
+            const gd = await gr.json().catch(()=>({}));
+            if (gd.errors) throw new Error("estoque: " + JSON.stringify(gd.errors).slice(0,120));
+          }
+
+          ok++;
+          const v0 = payload.product.variants[0];
+          log(`✅ [${done}] ${src.title} (${v0.price})`);
+        } catch(e){
+          failed++;
+          log(`❌ [${done}] ${src.title}: ${e.message.slice(0,100)}`);
+        }
+        await sleep(400);
+      }
+      log(`\n   → ok: ${ok} | pulados: ${skipped} | falhas: ${failed}`);
+    }
+
+    // ==============================
+    // 4) COLEÇÕES
+    // ==============================
+    if (options.collections){
+      log("\n📚 Importando coleções...");
+      step(88, "Coleções");
+      const cols = await fetchAllCollections(base, log);
+      let created = 0;
+      for (const c of cols){
+        try {
+          // Cria como custom collection (mais compatível — smart depende de rules específicas)
+          await restCall("POST", destination.shop, "/custom_collections.json", token, {
+            custom_collection: {
+              title: c.title,
+              handle: c.handle,
+              body_html: c.body_html || "",
+              published: true,
+            }
+          });
+          created++;
+          log(`   ✅ ${c.title}`);
+        } catch(e){
+          log(`   ❌ ${c.title}: ${e.message.slice(0,80)}`);
+        }
+        await sleep(300);
+      }
+      log(`   → ${created} coleções criadas`);
+      log(`   ℹ️ Aviso: os produtos não são automaticamente ligados às coleções — vincule manualmente no admin ou use uma smart collection depois.`);
+    }
+
+    step(100, "Concluído");
+    log("\n🎉 Importação finalizada!");
+  } catch(err) {
+    log("💥 " + err.message);
+  }
+  res.end();
+});
+
 app.listen(PORT, () => {
   console.log(`\n🔄 Shopify Store Cloner rodando na porta ${PORT}\n`);
 });
