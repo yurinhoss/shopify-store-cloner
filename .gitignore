@@ -4,3 +4,4 @@ configurar-idiomas-*.js
 aplicar-scopes.py
 clone-app-server.js
 .env
+.DS_Store
