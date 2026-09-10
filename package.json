@@ -1,14 +1,18 @@
 {
   "name": "shopify-store-cloner",
   "version": "1.0.0",
-  "description": "Clone Shopify stores — products, collections, theme, files, menus, policies",
+  "description": "Clone Shopify stores \u2014 products, collections, theme, files, menus, policies",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "dependencies": {
     "express": "^4.18.2",
     "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

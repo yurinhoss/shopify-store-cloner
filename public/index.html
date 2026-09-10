@@ -140,6 +140,7 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
   .options-grid { grid-template-columns: 1fr 1fr; }
 }
 </style>
+<link rel="stylesheet" href="/planner.css">
 </head>
 <body>
 
@@ -239,7 +240,7 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
             </div>
             <div style="flex:1;min-width:160px">
               <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px">⚡ Frete Expresso</label>
-              <input type="number" id="ship-express" value="9.70" min="0" step="0.10" style="width:100%;padding:9px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box">
+              <input type="number" id="ship-express" value="7.90" min="0" step="0.10" style="width:100%;padding:9px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box">
             </div>
           </div>
         </div>
@@ -339,7 +340,6 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
   </div>
 
   <!-- TAB REVIEWS -->
-  <div id="tab-reviews" style="display:none">
   <div id="tab-reviews" style="display:none">
     <div class="card">
       <div class="card-header"><h3>⭐ Judge.me Reviews Generator</h3><p>Fetch products randomly from your store and create realistic reviews automatically</p></div>
@@ -473,7 +473,7 @@ async function startClone() {
   // 📦 Captura os valores de frete escolhidos (em EUR)
   const shippingCosts={
     standard: parseFloat(document.getElementById('ship-standard').value) || 4.90,
-    express: parseFloat(document.getElementById('ship-express').value) || 9.70
+    express: parseFloat(document.getElementById('ship-express').value) || 7.90
   };
   if(shippingCosts.standard<=0||shippingCosts.express<=0){alert('❌ Valores de frete devem ser maiores que 0');return;}
   const btn=document.getElementById('btn-clone');btn.disabled=true;btn.textContent='⏳ Cloning in progress...';
@@ -481,19 +481,17 @@ async function startClone() {
   wrap.classList.add('active');logArea.innerHTML='';done.classList.remove('active');
 
   try {
-    // Inicia o job — retorna jobId imediatamente
-    const startRes = await fetch('/api/clone-start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({origin,destination,options,customize,shippingCosts})});
-    const {jobId} = await startRes.json();
-    _cloneJobId = jobId;
-    await connectToJob(jobId, logArea, bar, step, pct, done);
+    const response = await fetch('/api/clone',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({origin,destination,options,customize,shippingCosts})});
+    if (!response.ok) throw new Error('Não foi possível iniciar a clonagem: HTTP ' + response.status);
+    await connectToJob(null, logArea, bar, step, pct, done, response);
   } catch(err) {
     const d=document.createElement('div');d.className='log-line error';d.textContent='💥 '+err.message;logArea.appendChild(d);
   }
   btn.disabled=false;btn.textContent='🚀 Start Cloning';
 }
 
-async function connectToJob(jobId, logArea, bar, step, pct, done) {
-  const res = await fetch('/api/clone-status/'+jobId);
+async function connectToJob(jobId, logArea, bar, step, pct, done, response) {
+  const res = response || await fetch('/api/clone-status/'+jobId);
   const reader = res.body.getReader();
   _cloneReader = reader;
   const decoder = new TextDecoder();
@@ -520,7 +518,8 @@ async function connectToJob(jobId, logArea, bar, step, pct, done) {
     }
   } catch(err) {
     // Conexão caiu — reconecta automaticamente após 3s
-    if(_cloneJobId === jobId) {
+    if(response) throw new Error("Conexão interrompida. Verifique a loja antes de repetir a clonagem.");
+    if(jobId && _cloneJobId === jobId) {
       const d=document.createElement('div');d.className='log-line';d.textContent='⚠️ Conexão perdida, reconectando em 3s...';logArea.appendChild(d);
       await new Promise(r=>setTimeout(r,3000));
       await connectToJob(jobId, logArea, bar, step, pct, done);
@@ -805,5 +804,6 @@ async function startStoreImport(){
   }
 }
 </script>
+<script src="/planner.js"></script>
 </body>
 </html>
