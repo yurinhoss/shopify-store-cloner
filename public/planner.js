@@ -1,0 +1,63 @@
+(() => {
+  let countries=[];
+  const states={markets:{},shipping:{}};
+  const $=id=>document.getElementById(id);
+  function element(tag,text,cls) {const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;}
+  for(const mode of ['markets','shipping']) {
+    const host=element('section');host.id=`tab-${mode}`;host.style.display='none';
+    host.innerHTML=`<div class="planner-card"><h2>${mode==='markets'?'🌍 Configurar Markets':'🚚 Configurar fretes'}</h2>
+      <p>Configure diretamente a loja de destino, sem depender da loja de origem.</p>
+      <p><strong>Loja:</strong> <span id="${mode}-shop-label">preencha as credenciais em Clone Store</span> <button type="button" class="planner-link" onclick="switchTab('clone')">Editar credenciais</button></p>
+      <div class="planner-regions" id="${mode}-regions"></div>
+      <label>Buscar país <input id="${mode}-search" placeholder="Portugal, Brasil, Japão…" type="search"></label>
+      <div class="planner-countries" id="${mode}-countries"></div>
+      <p id="${mode}-count"></p>
+      <details><summary>Países excluídos da criação</summary><p id="${mode}-excluded"></p><p>Configurações que já existam nesses países são preservadas.</p></details>
+      ${mode==='shipping'?`<div class="planner-fields"><label>Padrão (€)<input id="planner-standard" type="number" min="0" max="10000" step="0.01" value="4.90"></label><label>Expresso (€)<input id="planner-express" type="number" min="0" max="10000" step="0.01" value="7.90"></label><label>Câmbio manual (opcional)<input id="planner-fx" type="number" min="0" step="any" placeholder="1 EUR = … moeda da loja"></label></div><p>Conversão consultada na prévia. Nomes das transportadoras são sugestões editáveis; não contratam transporte.</p><div class="planner-fields"><label>Perfil<select id="planner-profile"><option value="">Perfil geral da loja</option></select></label><label>Local de envio<select id="planner-group"><option value="">Carregar locais na prévia</option></select></label></div>`:`<p>Moeda local automática da Shopify. O idioma local sugerido será combinado com inglês, usando apenas idiomas publicados nesta loja.</p><p>Ao aplicar, cada mercado terá uma subpasta por país e apenas os idiomas exibidos na prévia.</p><div id="planner-locales"></div><button type="button" class="planner-link" id="planner-english">Usar inglês onde faltar o idioma local</button>`}
+      <div class="planner-actions"><button class="btn-primary" id="${mode}-preview">Verificar loja e gerar prévia</button><button class="btn-primary" id="${mode}-apply" disabled>Aplicar na loja</button></div>
+      <p id="${mode}-status" role="status" aria-live="polite"></p><div class="planner-table" id="${mode}-table"></div><pre class="planner-log" id="${mode}-log" aria-live="polite"></pre>
+      </div>`;
+    $('tab-clone').parentElement.appendChild(host);
+    const nav=element('button',mode==='markets'?'🌍 Markets':'🚚 Fretes','tab-btn');nav.dataset.planner=mode;nav.onclick=()=>switchTab(mode);document.querySelector('.tabs').appendChild(nav);
+    const state=states[mode];state.selected=new Set();state.locales={};state.names={};state.busy=false;
+    for(const region of ['Europa','Ásia','América','África','Oceania','Mundo todo','Limpar']) {
+      const b=element('button',region);b.type='button';b.onclick=()=> {
+        if(state.busy)return;
+        state.selected=new Set(region==='Limpar'?[]:countries.filter(c=>!c.excluded&&(region==='Mundo todo'||c.region===region)).map(c=>c.code));invalidate(mode);renderCountries(mode);
+      };$(`${mode}-regions`).appendChild(b);
+    }
+    $(`${mode}-search`).oninput=()=>renderCountries(mode);
+    $(`${mode}-preview`).onclick=()=>preview(mode);
+    $(`${mode}-apply`).onclick=()=>apply(mode);
+  }
+  $('planner-english').onclick=()=>{const state=states.markets;if(state.busy||!state.plan)return;for(const row of state.plan.rows)if(row.locale.error&&row.locale.english)state.locales[row.code]=row.locale.english;invalidate('markets');preview('markets');};
+  const originalSwitch=window.switchTab;
+  window.switchTab=function(mode){originalSwitch(mode);for(const m of ['markets','shipping']){ $(`tab-${m}`).style.display=m===mode?'block':'none';document.querySelector(`[data-planner="${m}"]`).classList.toggle('active',m===mode);$(`${m}-shop-label`).textContent=getStoreData('dest').shop||'preencha as credenciais em Clone Store';}};
+  function invalidate(mode){states[mode].plan=null;$(`${mode}-apply`).disabled=true;$(`${mode}-status`).textContent='Gere uma nova prévia para validar as escolhas.';}
+  for(const id of ['dest-shop','dest-id','dest-secret']) $(id).addEventListener('input',()=>{for(const m of ['markets','shipping']){states[m].locales={};invalidate(m);}});
+  for(const id of ['planner-standard','planner-express','planner-fx','planner-profile','planner-group']) $(id).addEventListener('change',()=>{if(id==='planner-profile')$('planner-group').innerHTML='<option value="">Selecione após carregar a prévia</option>';invalidate('shipping');});
+  function renderCountries(mode){const state=states[mode],host=$(`${mode}-countries`);host.replaceChildren();const search=$(`${mode}-search`).value.toLowerCase();for(const c of countries.filter(c=>!c.excluded&&(c.name.toLowerCase().includes(search)||c.code.toLowerCase().includes(search)))) {const label=element('label'),box=element('input');box.type='checkbox';box.checked=state.selected.has(c.code);box.disabled=state.busy;box.onchange=()=>{box.checked?state.selected.add(c.code):state.selected.delete(c.code);invalidate(mode);$(`${mode}-count`).textContent=`${state.selected.size} países selecionados`;};label.append(box,document.createTextNode(`${c.name} (${c.code})`));host.appendChild(label);}$(`${mode}-count`).textContent=`${state.selected.size} países selecionados`;}
+  function payload(mode){const state=states[mode];return {destination:getStoreData('dest'),mode,countries:[...state.selected],locales:state.locales,names:state.names,standard:$('planner-standard').value,express:$('planner-express').value,exchangeRate:$('planner-fx').value,profileId:$('planner-profile').value||undefined,groupId:$('planner-group').value||undefined};}
+  function busy(mode,on){states[mode].busy=on;$(`${mode}-preview`).disabled=on;$(`${mode}-apply`).disabled=on||!states[mode].plan||states[mode].plan.rows.some(r=>r.error);$(`tab-${mode}`).querySelectorAll('input,select').forEach(e=>e.disabled=on);renderCountries(mode);}
+  async function preview(mode){const state=states[mode];invalidate(mode);busy(mode,true);$(`${mode}-status`).textContent='Consultando a loja de destino…';try {const r=await fetch('/api/planner/preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload(mode))});const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.error||'Falha na consulta.');state.plan=data;state.destination=JSON.stringify(getStoreData('dest'));renderPlan(mode,data);}catch(e){$(`${mode}-status`).textContent=e.message;}finally{busy(mode,false);}}
+  function renderPlan(mode,plan){const state=states[mode],host=$(`${mode}-table`);host.replaceChildren();
+    if(mode==='markets') $('planner-locales').textContent='Idiomas publicados nesta loja: '+plan.locales.filter(l=>l.published).map(l=>`${l.name} (${l.locale})`).join(', ');
+    if(mode==='shipping') {
+      const profile=$('planner-profile'),group=$('planner-group');profile.replaceChildren();for(const p of plan.profiles){const option=element('option',p.name+(p.default?' (geral)':''));option.value=p.id;option.selected=p.id===plan.profileId;profile.appendChild(option);}
+      group.replaceChildren(element('option','Selecione o local de envio'));group.firstChild.value='';for(const g of plan.profiles.find(p=>p.id===plan.profileId)?.groups||[]){const option=element('option',g.name);option.value=g.id;option.selected=g.id===plan.groupId;group.appendChild(option);}
+      if(plan.selectionRequired){state.plan=null;$(`${mode}-status`).textContent='Escolha o local de envio e gere a prévia novamente.';return;}
+    }
+    const table=element('table'),head=element('tr');for(const title of mode==='markets'?['País','Moeda','Idioma principal + inglês','Ação / situação']:['País','Padrão / expresso','Valores','Ação / situação'])head.appendChild(element('th',title));table.appendChild(head);
+    for(const row of plan.rows){const tr=element('tr');tr.appendChild(element('td',row.name));
+      if(mode==='markets'){tr.appendChild(element('td',`${row.currency?row.currency+' · ':''}automática Shopify`));const td=element('td'),select=element('select');const placeholder=element('option','Escolha um idioma publicado');placeholder.value='';select.appendChild(placeholder);for(const l of plan.locales.filter(l=>l.published)){const opt=element('option',`${l.name} (${l.locale})`);opt.value=l.locale;opt.selected=l.locale===row.locale.primary;select.appendChild(opt);}select.onchange=()=>{state.locales[row.code]=select.value;invalidate(mode);};td.append(select,element('small',` Inglês: ${row.locale.english||'não publicado'} · Sugerido: ${row.language}`));tr.appendChild(td);
+      }else{const td=element('td');for(let i=0;i<2;i++){const inp=element('input');inp.value=row.names[i];inp.maxLength=100;inp.setAttribute('aria-label',`${row.name} ${i?'expresso':'padrão'}`);inp.onchange=()=>{state.names[row.code]={...(state.names[row.code]||{}),[i?'express':'standard']:inp.value};invalidate(mode);};td.appendChild(inp);}tr.append(td,element('td',`${plan.shop.currencyCode} ${plan.prices.standard} / ${plan.prices.express}`));}
+      tr.appendChild(element('td',row.error||row.locale?.warning||row.action,row.error?'planner-error':''));table.appendChild(tr);
+    }host.appendChild(table);const errors=plan.rows.filter(r=>r.error).length;
+    $(`${mode}-status`).textContent=`${plan.shop.name} · ${plan.rows.length} países · ${errors} pendências bloqueantes.`+(plan.fx?` Câmbio: 1 EUR = ${plan.fx.rate} ${plan.shop.currencyCode} (${plan.fx.source}, ${plan.fx.date}).`:'');
+  }
+  async function apply(mode){const state=states[mode];if(!state.plan)return;if(state.destination!==JSON.stringify(getStoreData('dest'))){invalidate(mode);return;}const plan=state.plan;if(!confirm(`Aplicar ${mode==='markets'?'Markets e idiomas':'fretes'} em ${getStoreData('dest').shop} para ${plan.rows.length} países, conforme a prévia?`))return;busy(mode,true);$(`${mode}-log`).textContent='';$(`${mode}-status`).textContent='Aplicando… mantenha esta página aberta.';let completed=false;
+    try{const r=await fetch('/api/planner/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:plan.id,destination:getStoreData('dest')})});if(!r.ok){const e=await r.json();throw new Error(e.error||'Falha ao aplicar.');}const reader=r.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const result=await reader.read();if(result.done)break;buffer+=decoder.decode(result.value,{stream:true});const lines=buffer.split('\n');buffer=lines.pop();for(const line of lines){if(!line.startsWith('data: '))continue;const e=JSON.parse(line.slice(6));if(e.type==='row')$(`${mode}-log`).textContent+=`${e.ok?'✓':'✕'} ${e.code}: ${e.message}\n`;if(e.type==='error')throw new Error(e.message);if(e.type==='done'){completed=true;$(`${mode}-status`).textContent=`Finalizado: ${e.ok} países configurados; ${e.failed} com erro. Gere outra prévia para revisar ou tentar novamente.`;}}}if(!completed)throw new Error('Conexão interrompida. Algumas alterações podem ter sido gravadas. Gere outra prévia antes de repetir.');}
+    catch(e){$(`${mode}-status`).textContent=e.message;}finally{state.plan=null;busy(mode,false);}
+  }
+  fetch('/api/planner/countries').then(r=>{if(!r.ok)throw new Error('Falha ao carregar países.');return r.json();}).then(data=>{countries=data.countries;for(const mode of ['markets','shipping']){$(`${mode}-excluded`).textContent=countries.filter(c=>c.excluded).map(c=>c.name).join(', ');renderCountries(mode);}}).catch(e=>{for(const mode of ['markets','shipping'])$(`${mode}-status`).textContent=e.message;});
+})();

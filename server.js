@@ -4,6 +4,8 @@
 // ============================================================
 
 import express from "express";
+import { registerPlanner, exchangeRate, money, checkPayload } from "./lib/planner.js";
+import { EXCLUDED } from "./lib/countries.js";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
@@ -11,7 +13,8 @@ const fetch = (...args) => import("node-fetch").then(({ default: f }) => f(...ar
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
+registerPlanner(app, getToken);
 app.use(express.static(join(__dirname, "public")));
 
 // ============================================================
@@ -576,9 +579,9 @@ app.post("/api/clone", async (req, res) => {
           }
           for (const r of e.node.regions.edges) if (r.node.code) existingCountries.add(r.node.code);
         }
-      } catch {}
+      } catch (err) { log(`❌ ${err.message}`, "error"); }
 
-      const novos = PAISES_MARKETS.filter(p => !existingCountries.has(p.code));
+      const novos = PAISES_MARKETS.filter(p => !EXCLUDED.has(p.code) && !existingCountries.has(p.code));
       log(`🌍 ${existingCountries.size} países já cobertos | ${novos.length} a criar`);
 
       let mkCriados = 0;
@@ -594,9 +597,9 @@ app.post("/api/clone", async (req, res) => {
             try {
               await gql(destination.shop, `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
                 { id: r.marketCreate.market.id, i: { localCurrencies: true } }, tokenDest);
-            } catch {}
+            } catch (err) { log(`❌ ${err.message}`, "error"); }
           }
-        } catch {}
+        } catch (err) { log(`❌ ${err.message}`, "error"); }
         await sleep(100);
       }
       log(`✅ Markets: ${mkCriados} criados | ${existingCountries.size} já existiam`, "success");
@@ -659,22 +662,12 @@ app.post("/api/clone", async (req, res) => {
         TR:{std:{name:"PTT Standart",desc:"5 ila 8 iş günü içinde teslimat"},pri:{name:"PTT Hızlı",desc:"3 ila 7 iş günü içinde teslimat"}},
       };
 
-      const TAXA_CAMBIO = {
-        EUR:1,USD:1.08,GBP:0.85,BRL:5.99,CHF:0.95,SEK:11.5,NOK:11.7,DKK:7.5,
-        PLN:4.3,CZK:25,HUF:395,RON:4.97,BGN:1.95,CAD:1.5,MXN:18,ARS:1000,
-        CLP:1000,COP:4500,PEN:4,UYU:43,JPY:170,KRW:1500,SGD:1.45,HKD:8.5,
-        TWD:35,AUD:1.65,NZD:1.78,CNY:7.8,AED:4,ILS:4,SAR:4,ZAR:20,MAD:11,
-        TRY:35,INR:90,THB:39,
-      };
-
-      // Descobre moeda da loja + delivery profile
       const shopData = await gql(destination.shop, `query{shop{currencyCode}}`, {}, tokenDest);
       const moedaLoja = shopData.shop.currencyCode;
-      const taxa = TAXA_CAMBIO[moedaLoja] || 1;
-      const precoStd = (4.90 * taxa).toFixed(2);
-      const precoPri = (9.70 * taxa).toFixed(2);
-
-      log(`💰 Moeda da loja: ${moedaLoja} | Standard: ${moedaLoja} ${precoStd} | Priority: ${moedaLoja} ${precoPri}`);
+      const fx = await exchangeRate(moedaLoja);
+      const precoStd = money(req.body.shippingCosts?.standard ?? 4.90, fx.rate, moedaLoja);
+      const precoPri = money(req.body.shippingCosts?.express ?? 7.90, fx.rate, moedaLoja);
+      log(`💰 Moeda da loja: ${moedaLoja} | Standard: ${precoStd} | Express: ${precoPri} | câmbio ${fx.date}`);
 
       // Pega delivery profile
       const profData = await gql(destination.shop, `
@@ -709,7 +702,7 @@ app.post("/api/clone", async (req, res) => {
         for (const ze of lg.locationGroupZones.edges)
           for (const c of ze.node.zone.countries) if (c.code.countryCode) paisesComFrete.add(c.code.countryCode);
 
-        const fretesPaises = Object.keys(FRETES).filter(c => !paisesComFrete.has(c));
+        const fretesPaises = Object.keys(FRETES).filter(c => !EXCLUDED.has(c) && !paisesComFrete.has(c));
         log(`🚚 ${paisesComFrete.size} países já têm frete | ${fretesPaises.length} a criar`);
 
         let shCriados = 0;
@@ -718,7 +711,7 @@ app.post("/api/clone", async (req, res) => {
           const frete = FRETES[code];
           progress("shipping", i + 1, fretesPaises.length);
           try {
-            await gql(destination.shop, `mutation deliveryProfileUpdate($id:ID!,$profile:DeliveryProfileInput!){deliveryProfileUpdate(id:$id,profile:$profile){profile{id}userErrors{field message}}}`, {
+            const shippingResult = await gql(destination.shop, `mutation deliveryProfileUpdate($id:ID!,$profile:DeliveryProfileInput!){deliveryProfileUpdate(id:$id,profile:$profile){profile{id}userErrors{field message}}}`, {
               id: profile.id,
               profile: { locationGroupsToUpdate: [{ id: lg.locationGroup.id, zonesToCreate: [{
                 name: code,
@@ -729,11 +722,12 @@ app.post("/api/clone", async (req, res) => {
                 ],
               }]}]}
             }, tokenDest);
+            checkPayload(shippingResult.deliveryProfileUpdate, "deliveryProfileUpdate");
             shCriados++;
-          } catch {}
+          } catch (err) { log(`❌ ${err.message}`, "error"); }
           await sleep(100);
         }
-        log(`✅ Fretes: ${shCriados} países criados | Standard €4.90 | Priority €9.70`, "success");
+        log(`✅ Fretes: ${shCriados} países criados | Standard ${moedaLoja} ${precoStd} | Express ${moedaLoja} ${precoPri}`, "success");
       }
     }
 
