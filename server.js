@@ -4,6 +4,7 @@
 // ============================================================
 
 import express from "express";
+import {registerReset} from "./lib/reset.js";
 import { paginateShopify } from "./lib/pagination.js";
 import { registerPlanner, exchangeRate, money, checkPayload, credentials } from "./lib/planner.js";
 import { EXCLUDED } from "./lib/countries.js";
@@ -19,6 +20,7 @@ const API_VERSION = "2026-07";
 
 app.use(express.json({ limit: "1mb" }));
 registerPlanner(app, getToken);
+registerReset(app, {getToken, gql, restCall, restPaginated, sleep});
 app.use(express.static(join(__dirname, "public")));
 
 // ============================================================

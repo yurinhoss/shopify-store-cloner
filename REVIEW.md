@@ -33,3 +33,16 @@ Interface alinhada ao Ponte Checkout (`painel/dashboard.html`) e ao YDE Dash (`p
 - O importador informa no próprio código que coleções públicas criadas não recebem automaticamente seus produtos; implementar esse vínculo exige uma etapa adicional.
 - Upload de arquivos precisa de validação integrada em uma loja de teste: o helper atual tenta enviar `data:` como `originalSource` e descarta falhas; este fluxo não foi refeito aqui.
 - A conclusão com pendências considera mensagens marcadas como erro; o app ainda não oferece resumo estruturado de sucesso/falha para cada recurso.
+
+
+## Restauração do reset
+
+Recuperado do commit `2dfaedf17e12cac02cd9417b0b8ed9e069f3d874` após revisão do histórico. As oito etapas voltaram ao layout atual; `/api/reset-start` agora transmite SSE diretamente para o novo cliente. Exige confirmação do domínio no servidor, rejeita opções desconhecidas e bloqueia resets simultâneos para a mesma loja neste processo. Nenhuma exclusão é iniciada automaticamente.
+
+Markets usa `primaryMarket { id }`, ainda disponível na API 2026-07, em vez do campo antigo `Market.primary`; Markets e menus são paginados. Arquivos interrompem a operação se a leitura de imagens de produtos falhar. Fretes mantém o comportamento histórico: apenas zonas com nome de duas letras no perfil geral; se um grupo exceder a página suportada, interrompe sem excluir suas zonas. A proteção de arquivos cobre imagens, não vídeos vinculados aos produtos; a interface informa que arquivos usados no tema podem ser excluídos.
+
+Fontes de compatibilidade: https://shopify.dev/docs/api/admin-graphql/latest/queries/primaryMarket e https://shopify.dev/docs/api/admin-graphql/latest/objects/Menu.
+
+Validação com respostas simuladas, sem exclusões em lojas reais: confirmação obrigatória, exclusão limitada ao destino e à seleção, preservação do mercado principal e de menus padrão, proteção de imagens, falhas parciais e endpoint SSE.
+
+Resultado da restauração: 26 testes passaram. Chromium em 390 px validou oito opções, cancelamento sem requisição, envio apenas das etapas selecionadas, conclusão SSE simulada e ausência de erros JavaScript/overflow horizontal.
