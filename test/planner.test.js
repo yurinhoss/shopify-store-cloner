@@ -10,16 +10,38 @@ test('complete catalog, unique countries and all 50 exclusions enforced on the s
  for(const code of EXCLUDED)assert.throws(()=>selectCountries([code]),/excluído/);
  assert.equal(selectCountries(['PT','PT']).length,1);assert.throws(()=>selectCountries([]));assert.throws(()=>selectCountries(['ZZ']));
 });
-test('languages depend on each destination, including publication state and Portuguese variants',()=>{
+test('idioma é escolhido automaticamente e nunca troca variantes de português',()=>{
+ // idioma local publicado -> usa o idioma local
  assert.equal(resolveLocale(country('PT'),locales('en','pt-PT')).primary,'pt-PT');
- assert.ok(resolveLocale(country('PT'),locales('en','pt-BR')).error);
- assert.ok(resolveLocale(country('FR'),locales('en','de')).error);
  assert.equal(resolveLocale(country('FR'),locales('en','fr')).primary,'fr');
- assert.equal(resolveLocale(country('FR'),locales('en','de'),'en').primary,'en');
- assert.ok(resolveLocale(country('FR'),[...locales('en'),{locale:'fr',published:false}]).error);
- assert.ok(resolveLocale(country('FR'),locales('fr')).error);
+ assert.equal(resolveLocale(country('PT'),locales('en','pt-PT')).source,'local');
+ // pt-BR não serve para Portugal: cai para inglês AUTOMATICAMENTE, com aviso e sem bloquear
+ const pt=resolveLocale(country('PT'),locales('en','pt-BR'));
+ assert.equal(pt.primary,'en');assert.equal(pt.source,'english');assert.ok(!pt.error);assert.ok(pt.warning);
+ // idioma local ausente ou despublicado -> inglês automático, também sem bloquear
+ assert.equal(resolveLocale(country('FR'),locales('en','de')).primary,'en');
+ assert.equal(resolveLocale(country('FR'),[...locales('en'),{locale:'fr',published:false}]).primary,'en');
+ assert.ok(!resolveLocale(country('FR'),locales('en','de')).error);
+ // a escolha manual continua valendo e continua sendo validada
+ assert.equal(resolveLocale(country('FR'),locales('en','de'),'de').primary,'de');
+ assert.equal(resolveLocale(country('FR'),locales('en','de'),'de').source,'manual');
  assert.ok(resolveLocale(country('FR'),locales('en'),'fr').error);
+ // sem inglês publicado não há rede de segurança: aí sim bloqueia
+ assert.ok(resolveLocale(country('FR'),locales('fr')).error);
+ // país de língua inglesa não duplica o inglês
  assert.deepEqual(resolveLocale(country('US'),locales('en')).alternate,[]);
+});
+test('prévia de Markets não gera pendência bloqueante quando falta o idioma local',async()=>{
+ const call=async q=>{
+  if(q.includes('PlannerShop'))return {shop:{name:'Test',currencyCode:'JPY'}};
+  if(q.includes('PlannerLocales'))return {shopLocales:locales('en')};
+  return {markets:connection([])};
+ };
+ const p=await prepare(call,{mode:'markets',countries:['JP']});
+ assert.equal(p.rows.length,1);
+ assert.equal(p.rows[0].locale.primary,'en');
+ assert.ok(!p.rows[0].error,'nenhuma pendência deve bloquear o apply');
+ assert.ok(p.rows[0].locale.warning);
 });
 test('money accepts free shipping, rejects invalid amounts and rounds JPY',()=>{
  assert.equal(money(4.9,1,'EUR'),'4.90');assert.equal(money(7.9,160,'JPY'),'1264');assert.equal(money(0,1,'USD'),'0.00');

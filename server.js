@@ -9,9 +9,12 @@ import { EXCLUDED } from "./lib/countries.js";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 
-const fetch = (...args) => import("node-fetch").then(({ default: f }) => f(...args));
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
+
+// Versão da Admin API. Trocar AQUI atualiza o app inteiro.
+// A Shopify suporta cada versão por ~12 meses; revise a cada trimestre em shopify.dev.
+const API_VERSION = "2026-07";
 
 app.use(express.json({ limit: "1mb" }));
 registerPlanner(app, getToken);
@@ -43,7 +46,7 @@ async function restCall(method, shop, path, token, body = null) {
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
     };
     if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`https://${shop}/admin/api/2024-10${path}`, opts);
+    const res = await fetch(`https://${shop}/admin/api/${API_VERSION}${path}`, opts);
     if (res.status === 429) { attempt++; await sleep(2000 * attempt); continue; }
     const text = await res.text();
     if (!res.ok) throw new Error(`${res.status}: ${text.slice(0, 300)}`);
@@ -95,7 +98,7 @@ async function uploadFileBase64(base64, filename, tokenDest, shopDest) {
 
 async function restPaginated(shop, path, token, key) {
   const items = [];
-  let url = `https://${shop}/admin/api/2024-10${path}`;
+  let url = `https://${shop}/admin/api/${API_VERSION}${path}`;
   while (url) {
     let attempt = 0;
     while (attempt < 5) {
@@ -114,14 +117,23 @@ async function restPaginated(shop, path, token, key) {
 }
 
 async function gql(shop, query, variables, token) {
-  const res = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-    body: JSON.stringify({ query, variables }),
-  });
-  const data = await res.json();
-  if (data.errors) throw new Error(JSON.stringify(data.errors));
-  return data.data;
+  // O GraphQL da Shopify NÃO devolve 429: ele responde 200 com errors[].extensions.code = "THROTTLED".
+  // Sem tratar isso, uma clonagem grande morre no meio. Aqui a gente espera e tenta de novo.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await fetch(`https://${shop}/admin/api/${API_VERSION}/graphql.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (res.status === 429) { await sleep(1000 * (attempt + 1)); continue; }
+    if (!res.ok) throw new Error(`Shopify HTTP ${res.status}. Verifique as permissões do app.`);
+    const data = await res.json();
+    if (data.errors?.every((e) => e.extensions?.code === "THROTTLED")) { await sleep(1000 * (attempt + 1)); continue; }
+    if (data.errors?.length) throw new Error(data.errors.map((e) => e.message).join("; "));
+    if (!data.data) throw new Error("A Shopify não retornou dados.");
+    return data.data;
+  }
+  throw new Error("Limite de chamadas da Shopify atingido. Aguarde alguns minutos e tente de novo.");
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -916,169 +928,6 @@ app.post("/api/clone", async (req, res) => {
   res.end();
 });
 
-// ============================================================
-//  API: REVIEWS GENERATOR (Judge.me)
-// ============================================================
-app.post("/api/reviews", async (req, res) => {
-  const { shop, token, qty, fivePct, openaiKey, useImages } = req.body;
-
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-
-  const send = (type, data) => res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
-  const log = (msg) => send("log", { msg });
-
-  const NOMES = [
-    'James W.','Sophie M.','Lucas B.','Emma T.','Noah K.','Olivia R.',
-    'Liam S.','Ava C.','Mason D.','Isabella F.','Ethan G.','Mia H.',
-    'Alexander J.','Charlotte L.','Benjamin N.','Amelia P.','William Q.',
-    'Harper V.','Evelyn Z.','Michael R.','Sarah K.','David L.',
-    'Emma J.','Chris B.','Laura S.','Tom W.','Anna M.','Peter H.','Lisa G.',
-    'Carlos M.','Maria S.','João P.','Ana L.','Ricardo F.','Paula C.',
-    'Daniel A.','Fernanda B.','Gabriel N.','Camila O.','Felipe T.','Julia R.',
-  ];
-
-  const TEXTOS5 = [
-    "Absolutely love the fit. The design is unique and gets compliments every time I wear it. Quality exceeded my expectations.",
-    "Amazing product! Fast shipping and the quality is top notch. Will definitely order again.",
-    "Perfect fit and the material feels premium. Exactly as described. Very happy with this purchase.",
-    "Incredible quality for the price. The design is stylish and modern. Highly recommend!",
-    "Best purchase I've made this year. The product looks even better in person. 10/10!",
-    "Great quality and fast delivery. The sizing was spot on. Love it!",
-    "This exceeded all my expectations. Excellent craftsmanship and arrived quickly.",
-    "Stunning design and very comfortable. I've received so many compliments already.",
-    "Very satisfied with this purchase. The quality is premium and shipping was fast.",
-    "Exactly what I was looking for. Fits perfectly and looks amazing. Will buy again!",
-    "Outstanding quality. Well made and looks fantastic. Highly recommend.",
-    "Love this! Unique design and excellent quality. Very happy customer.",
-    "Perfect in every way. Fast shipping, great packaging, beautiful product.",
-    "Incredible value. Quality is much better than expected. 5 stars without hesitation.",
-    "Fits true to size and the material is very comfortable. Love everything about it.",
-    "Super stylish and very well made. Shipping was quick and packaging was great.",
-    "These are my new favourite. Comfort level is off the charts!",
-    "Gorgeous design and the quality feels premium. Very impressed with this purchase.",
-  ];
-
-  const TEXTOS4 = [
-    "Really nice product overall. Quality is good and shipping was reasonably fast. Happy with my purchase.",
-    "Good quality item. Looks great and fits well. Minor delay in shipping but worth the wait.",
-    "Nice product, quality is solid. Would have given 5 stars but took a bit longer to arrive.",
-    "Good purchase overall. Product is as described and quality is decent. Would buy again.",
-    "Happy with it. Good quality and nice design. Delivery was a bit slow but okay.",
-  ];
-
-  const TITULOS5 = ['Love it!','Perfect!','Amazing quality','Exceeded expectations','Highly recommend!','5 stars!','Best purchase!','Absolutely stunning','So comfortable!','Great product!'];
-  const TITULOS4 = ['Really good','Nice product','Good quality','Happy with it','Worth buying'];
-
-  function rand(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-  function emailRand(nome) {
-    const dominios = ['gmail.com','yahoo.com','hotmail.com','outlook.com','icloud.com'];
-    return nome.toLowerCase().replace(/[^a-z]/g,'') + Math.floor(Math.random()*999) + '@' + rand(dominios);
-  }
-
-  try {
-    // 1. Busca produtos via Judge.me
-    log("🔍 Buscando produtos da loja...");
-    const prodRes = await fetch(`https://judge.me/api/v1/products?api_token=${token}&shop_domain=${shop}&per_page=100`, {
-      headers: { 'Content-Type': 'application/json' }
-    });
-    const prodData = await prodRes.json();
-    const products = prodData.products || [];
-
-    if (!products.length) {
-      send("error", { msg: "Nenhum produto encontrado. Verifique o token e o shop domain." });
-      res.end(); return;
-    }
-
-    send("products", { count: products.length });
-    log(`✅ ${products.length} produtos encontrados`);
-
-    // 2. Gera imagens via DALL-E se configurado
-    const imagens = [];
-    if (useImages && openaiKey) {
-      const QTD_IMGS = 10;
-      log(`🎨 Gerando ${QTD_IMGS} imagens via DALL-E 3...`);
-      const prods_embaralhados = [...products].sort(() => Math.random() - 0.5);
-      for (let i = 0; i < QTD_IMGS; i++) {
-        const p = prods_embaralhados[i % prods_embaralhados.length];
-        try {
-          const imgRes = await fetch('https://api.openai.com/v1/images/generations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${openaiKey}` },
-            body: JSON.stringify({ model: 'dall-e-3', prompt: `Person wearing or using ${p.title}, lifestyle photo, natural daylight, clean background, high quality fashion photography`, n: 1, size: '1024x1024', quality: 'hd' })
-          });
-          const imgData = await imgRes.json();
-          const url = imgData.data?.[0]?.url;
-          if (url) {
-            imagens.push(url);
-            log(`  🖼️ Imagem ${i+1}/${QTD_IMGS} gerada`);
-          }
-        } catch { log(`  ⚠️ Falha imagem ${i+1}`); }
-        await sleep(1200);
-      }
-      log(`✅ ${imagens.length} imagens prontas`);
-    }
-
-    // 3. Distribui reviews pelos produtos
-    const reviewsPorProduto = Math.ceil(qty / products.length);
-    let criadas = 0;
-
-    for (const product of products) {
-      const qtdProd = Math.min(reviewsPorProduto, qty - criadas);
-      if (qtdProd <= 0) break;
-
-      for (let i = 0; i < qtdProd; i++) {
-        const stars = Math.random() * 100 < (fivePct || 85) ? 5 : 4;
-        const nome = rand(NOMES);
-        const texto = stars === 5 ? rand(TEXTOS5) : rand(TEXTOS4);
-        const titulo = stars === 5 ? rand(TITULOS5) : rand(TITULOS4);
-        const usarImg = imagens.length > 0 && criadas % 8 === 0;
-        const imgUrl = usarImg ? imagens[Math.floor(Math.random() * imagens.length)] : null;
-
-        const body = {
-          api_token: token,
-          shop_domain: shop,
-          platform: 'shopify',
-          id: product.external_id,
-          title: titulo,
-          body: texto,
-          rating: stars,
-          name: nome,
-          email: emailRand(nome),
-          picture_urls: imgUrl ? [imgUrl] : [],
-          verified_buyer: Math.random() > 0.3,
-          featured: Math.random() > 0.7,
-          curated: 'ok',
-          published: true,
-        };
-
-        try {
-          const r = await fetch('https://judge.me/api/v1/reviews', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-          });
-          if (r.status === 200 || r.status === 201) {
-            criadas++;
-            send("review", { stars, name: nome, img: !!imgUrl });
-          } else {
-            const err = await r.json();
-            log(`  ⚠️ Erro: ${JSON.stringify(err)}`);
-          }
-        } catch(e) { log(`  ⚠️ Exceção: ${e.message}`); }
-
-        await sleep(300);
-      }
-      if (criadas >= qty) break;
-    }
-
-    send("done", { total: criadas });
-  } catch(err) {
-    send("error", { msg: err.message });
-  }
-  res.end();
-});
 
 const PORT = process.env.PORT || 3000;
 
@@ -1432,7 +1281,7 @@ app.post("/api/store-import", async (req, res) => {
               locationId: `gid://shopify/Location/${locationId}`,
               quantity: rules.stock,
             }));
-            const gqlUrl = `https://${destination.shop}/admin/api/2024-10/graphql.json`;
+            const gqlUrl = `https://${destination.shop}/admin/api/${API_VERSION}/graphql.json`;
             const gr = await fetch(gqlUrl, {
               method: "POST",
               headers: { "Content-Type":"application/json", "X-Shopify-Access-Token": token },

@@ -1,7 +1,7 @@
 {
   "name": "shopify-store-cloner",
   "version": "1.0.0",
-  "description": "Clone Shopify stores \u2014 products, collections, theme, files, menus, policies",
+  "description": "Clona lojas Shopify — produtos, coleções, tema, arquivos, menus, políticas — e configura Markets e fretes por país",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -9,8 +9,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "node-fetch": "^3.3.2"
+    "express": "^4.18.2"
   },
   "engines": {
     "node": ">=20"

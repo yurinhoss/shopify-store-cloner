@@ -1,7 +1,7 @@
 organizar-colecoes.js
-organizar-colecoes.js
 configurar-idiomas-*.js
 aplicar-scopes.py
 clone-app-server.js
 .env
 .DS_Store
+node_modules/

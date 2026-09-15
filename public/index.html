@@ -25,7 +25,7 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 
 /* TABS */
 .tabs-wrap { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 32px; }
-.tabs { display: flex; }
+.tabs { display: flex; flex-wrap: wrap; }
 .tab-btn { padding: 14px 20px; border: none; background: none; color: var(--text3); font-size: 13px; font-weight: 500; font-family: 'Poppins', sans-serif; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all .2s; display: flex; align-items: center; gap: 6px; }
 .tab-btn:hover { color: var(--text); }
 .tab-btn.active { color: var(--green); border-bottom-color: var(--green); font-weight: 600; }
@@ -123,10 +123,6 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 .ck-abrir:hover { background: var(--green-bg); }
 
 /* REVIEWS */
-.rv-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
-.rv-stat { background: var(--bg); border: 1px solid var(--border); border-radius: 11px; padding: 16px; text-align: center; }
-.rv-stat .val { font-size: 32px; font-weight: 800; color: var(--green); line-height: 1; }
-.rv-stat .lbl { font-size: 11px; color: var(--text3); margin-top: 4px; font-weight: 500; }
 .rating-row { display: flex; align-items: center; gap: 10px; margin: 5px 0; }
 .rating-row .stars { font-size: 12px; color: #f6ad55; width: 64px; }
 .rating-row .bar { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
@@ -160,11 +156,10 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 
 <div class="tabs-wrap">
   <div class="tabs">
-    <button class="tab-btn active" onclick="switchTab('clone')">🔄 Clone Store</button>
-    <button class="tab-btn" onclick="switchTab('storeimport')">🌐 Store Import</button>
-    <button class="tab-btn" onclick="switchTab('reviews')">⭐ Reviews Generator</button>
-    <button class="tab-btn" onclick="switchTab('scopes')">🔑 API Scopes</button>
-    <button class="tab-btn" onclick="switchTab('reset')">🗑️ Resetar</button>
+    <button class="tab-btn active" type="button" data-tab="clone">🔄 Clone Store</button>
+    <button class="tab-btn" type="button" data-tab="storeimport">🌐 Store Import</button>
+    <button class="tab-btn" type="button" data-tab="scopes">🔑 API Scopes</button>
+    <button class="tab-btn" type="button" data-tab="reset">🗑️ Resetar</button>
   </div>
 </div>
 
@@ -339,49 +334,6 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
     </div>
   </div>
 
-  <!-- TAB REVIEWS -->
-  <div id="tab-reviews" style="display:none">
-    <div class="card">
-      <div class="card-header"><h3>⭐ Judge.me Reviews Generator</h3><p>Fetch products randomly from your store and create realistic reviews automatically</p></div>
-      <div class="card-body">
-        <div class="two-col" style="margin-bottom:16px">
-          <div class="field"><label>Shop Domain</label><input id="rv-shop" placeholder="mystore.myshopify.com"></div>
-          <div class="field"><label>Judge.me Private Token</label><input id="rv-token" type="password" placeholder="Bllni_..."></div>
-        </div>
-        <div class="three-col" style="margin-bottom:16px">
-          <div class="field"><label>Number of Reviews</label><input id="rv-qty" type="number" value="100" min="1" max="500"></div>
-          <div class="field"><label>% of 5 Stars</label><input id="rv-five" type="number" value="85" min="50" max="100"></div>
-          <div class="field"><label>OpenAI Key (optional)</label><input id="rv-openai" type="password" placeholder="sk-proj-..."></div>
-        </div>
-        <label class="option-item" style="width:fit-content;margin-bottom:20px">
-          <input type="checkbox" id="rv-images" checked> Generate images via DALL-E 3
-          <span style="color:var(--text3);font-size:11px;margin-left:4px">~10 images distributed across reviews</span>
-        </label>
-        <button class="btn btn-primary" id="btn-reviews" onclick="startReviews()">⭐ Generate Reviews</button>
-      </div>
-    </div>
-
-    <div id="rv-stats-section" style="display:none">
-      <div class="card">
-        <div class="card-header"><h3>📊 Live Progress</h3></div>
-        <div class="card-body">
-          <div class="rv-stats">
-            <div class="rv-stat"><div class="val" id="rv-stat-criadas">0</div><div class="lbl">Reviews Created</div></div>
-            <div class="rv-stat"><div class="val" id="rv-stat-produtos">0</div><div class="lbl">Products Found</div></div>
-          </div>
-          <div style="margin-bottom:14px">
-            <div class="rating-row"><span class="stars">★★★★★</span><div class="bar"><div class="bar-fill" id="bar5" style="width:0%"></div></div><span class="pct" id="pct5">0%</span></div>
-            <div class="rating-row"><span class="stars" style="color:#a0aec0">★★★★☆</span><div class="bar"><div class="bar-fill" id="bar4" style="width:0%;background:#a0aec0"></div></div><span class="pct" id="pct4">0%</span></div>
-          </div>
-          <div class="progress-label"><span id="rv-progress-label">Starting...</span><span id="rv-progress-pct">0%</span></div>
-          <div class="progress-bar-bg"><div class="progress-bar-fill" id="rv-progress-bar"></div></div>
-          <div class="log-area" id="rv-log-area" style="margin-top:12px"></div>
-          <div class="done-banner" id="rv-done-banner"><h3>🎉 Reviews generated successfully!</h3><p>Check your Judge.me dashboard to see the reviews live.</p></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- TAB SCOPES -->
   <div id="tab-scopes" style="display:none">
     <div class="card">
@@ -425,15 +377,29 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 
 
 <script>
-function switchTab(tab) {
-  if (document.getElementById('tab-reset')) document.getElementById('tab-reset').style.display = tab==='reset'?'block':'none';
-  const map={clone:0,storeimport:1,reviews:2,scopes:3,reset:4};
-  document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active',i===map[tab]));
-  document.getElementById('tab-clone').style.display = tab==='clone'?'block':'none';
-  document.getElementById('tab-storeimport').style.display = tab==='storeimport'?'block':'none';
-  document.getElementById('tab-reviews').style.display = tab==='reviews'?'block':'none';
-  document.getElementById('tab-scopes').style.display = tab==='scopes'?'block':'none';
+// ============================================================
+//  ABAS — registro central
+//  Cada aba se registra aqui (inclusive as criadas pelo planner.js).
+//  Assim ninguém depende da ORDEM dos botões na tela: adicionar ou
+//  remover uma aba não quebra as outras.
+// ============================================================
+const TABS = [];
+function registerTab(id, button) {
+  if (!TABS.some(t => t.id === id)) TABS.push({ id, button });
+  button.type = 'button';
+  button.addEventListener('click', () => switchTab(id));
 }
+function switchTab(id) {
+  if (!TABS.some(t => t.id === id)) id = TABS[0]?.id;
+  for (const t of TABS) {
+    const panel = document.getElementById('tab-' + t.id);
+    if (panel) panel.style.display = t.id === id ? 'block' : 'none';
+    t.button.classList.toggle('active', t.id === id);
+  }
+  // Avisa quem precisa reagir à troca de aba (ex.: planner.js atualiza o nome da loja)
+  document.dispatchEvent(new CustomEvent('tabchange', { detail: id }));
+}
+document.querySelectorAll('.tab-btn[data-tab]').forEach(b => registerTab(b.dataset.tab, b));
 function copyScopes(){
   const ta=document.getElementById('scopes-text');
   ta.select();
@@ -638,83 +604,6 @@ async function startReset() {
   document.getElementById('btn-reset').disabled = false;
 }
 
-async function startReviews() {
-  const shop=document.getElementById('rv-shop').value.trim(),token=document.getElementById('rv-token').value.trim(),qty=parseInt(document.getElementById('rv-qty').value)||100,fivePct=parseInt(document.getElementById('rv-five').value)||85,useImages=document.getElementById('rv-images').checked;
-  if(!shop||!token){alert('Fill in the Shop Domain and Judge.me Token');return;}
-  const btn=document.getElementById('btn-reviews');btn.disabled=true;btn.textContent='⏳ Generating...';
-  document.getElementById('rv-stats-section').style.display='block';
-  document.getElementById('rv-log-area').innerHTML='';document.getElementById('rv-done-banner').classList.remove('active');
-  document.getElementById('rv-stat-criadas').textContent='0';document.getElementById('rv-progress-bar').style.width='0%';
-
-  const NOMES=['James W.','Sophie M.','Lucas B.','Emma T.','Noah K.','Olivia R.','Liam S.','Ava C.','Mason D.','Isabella F.','Ethan G.','Mia H.','Alexander J.','Charlotte L.','Benjamin N.','Amelia P.','William Q.','Harper V.','Evelyn Z.','Michael R.','Sarah K.','David L.','Emma J.','Chris B.','Laura S.','Tom W.','Anna M.','Peter H.','Lisa G.','Carlos M.'];
-  const T5=['Absolutely love the fit. The design is unique and gets compliments every time I wear it. Quality exceeded my expectations.','Amazing product! Fast shipping and the quality is top notch. Will definitely order again.','Perfect fit and the material feels premium. Exactly as described. Very happy with this purchase.','Incredible quality for the price. The design is stylish and modern. Highly recommend!','Best purchase I have made this year. The product looks even better in person. 10/10!','Great quality and fast delivery. The sizing was spot on. Love it!','This exceeded all my expectations. Excellent craftsmanship and arrived quickly.','Stunning design and very comfortable. I have received so many compliments already.','Very satisfied! Premium quality and fast shipping. Will order another.','Exactly what I was looking for. Fits perfectly and looks amazing. Will buy again!'];
-  const T4=['Really nice product overall. Quality is good and shipping was reasonably fast.','Good quality item. Looks great and fits well. Minor delay in shipping but worth the wait.','Nice product, quality is solid. Would have given 5 stars but took a bit longer to arrive.','Good purchase overall. Product is as described. Would buy again.','Happy with it. Good quality and nice design.'];
-  const TIT5=['Love it!','Perfect!','Amazing quality','Exceeded expectations','Highly recommend!','5 stars!','Best purchase!','Absolutely stunning','So comfortable!','Great product!'];
-  const TIT4=['Really good','Nice product','Good quality','Happy with it','Worth buying'];
-  const DOMS=['gmail.com','yahoo.com','hotmail.com','outlook.com','icloud.com'];
-  function rand(a){return a[Math.floor(Math.random()*a.length)];}
-  function email(n){return n.toLowerCase().replace(/[^a-z]/g,'')+Math.floor(Math.random()*999)+'@'+rand(DOMS);}
-  function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
-
-  let c5=0,c4=0,criadas=0;
-  try{
-    // Busca produtos
-    rvLog('🔍 Buscando produtos da loja...');
-    const prodRes=await fetch('/api/jm-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:'GET',path:`/api/v1/products?api_token=${token}&shop_domain=${shop}&per_page=100`})});
-    if(!prodRes.ok){const e=await prodRes.json().catch(()=>({}));rvLog('❌ Erro ao buscar produtos: '+prodRes.status+' '+(e.error||''));btn.disabled=false;btn.textContent='⭐ Generate Reviews';return;}
-    const prodData=await prodRes.json();
-    const products=prodData.products||[];
-    if(!products.length){rvLog('❌ Nenhum produto encontrado.');btn.disabled=false;btn.textContent='⭐ Generate Reviews';return;}
-    document.getElementById('rv-stat-produtos').textContent=products.length;
-    rvLog(`📦 ${products.length} produtos encontrados`);
-
-    const perProd=Math.ceil(qty/products.length);
-    for(const product of products){
-      const qtdP=Math.min(perProd,qty-criadas);
-      if(qtdP<=0)break;
-      for(let i=0;i<qtdP;i++){
-        const stars=Math.random()*100<fivePct?5:4;
-        const nome=rand(NOMES);
-        const body={
-          api_token:token,shop_domain:shop,platform:'shopify',
-          id:product.external_id,
-          title:stars===5?rand(TIT5):rand(TIT4),
-          body:stars===5?rand(T5):rand(T4),
-          rating:stars,name:nome,email:email(nome),
-          picture_urls:[],
-          verified_buyer:Math.random()>0.3,
-          featured:Math.random()>0.7,
-          curated:'ok',published:true
-        };
-        try{
-          const r=await fetch('/api/jm-proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:'POST',path:'/api/v1/reviews',body})});
-          if(r.status===200||r.status===201){
-            criadas++;
-            if(stars===5)c5++;else c4++;
-            const tot=c5+c4,p5=Math.round(c5/tot*100),p4=100-p5;
-            document.getElementById('rv-stat-criadas').textContent=criadas;
-            document.getElementById('bar5').style.width=p5+'%';document.getElementById('pct5').textContent=p5+'%';
-            document.getElementById('bar4').style.width=p4+'%';document.getElementById('pct4').textContent=p4+'%';
-            const pp=Math.round(criadas/qty*100);
-            document.getElementById('rv-progress-bar').style.width=pp+'%';document.getElementById('rv-progress-pct').textContent=pp+'%';
-            document.getElementById('rv-progress-label').textContent=`${criadas}/${qty} reviews created`;
-            rvLog(`  ✅ [${criadas}/${qty}] ${nome} — ${stars}⭐`);
-          } else {
-            const err=await r.json();rvLog(`  ⚠️ ${JSON.stringify(err)}`);
-          }
-        }catch(e){rvLog(`  ⚠️ ${e.message}`);}
-        await sleep(300);
-      }
-      if(criadas>=qty)break;
-    }
-    document.getElementById('rv-done-banner').classList.add('active');
-    document.getElementById('rv-progress-bar').style.width='100%';
-    document.getElementById('rv-progress-pct').textContent='100%';
-    rvLog(`🎉 Concluído! ${criadas} reviews criadas.`);
-  }catch(err){rvLog('💥 '+err.message);}
-  btn.disabled=false;btn.textContent='⭐ Generate Reviews';
-}
-function rvLog(msg){const el=document.getElementById('rv-log-area');const d=document.createElement('div');d.className='log-line';d.textContent=msg;el.appendChild(d);el.scrollTop=el.scrollHeight;}
 
 // ============================================================
 //  STORE IMPORT — importa via URL pública (streaming SSE)
