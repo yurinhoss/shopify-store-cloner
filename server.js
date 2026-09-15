@@ -4,7 +4,8 @@
 // ============================================================
 
 import express from "express";
-import { registerPlanner, exchangeRate, money, checkPayload } from "./lib/planner.js";
+import { paginateShopify } from "./lib/pagination.js";
+import { registerPlanner, exchangeRate, money, checkPayload, credentials } from "./lib/planner.js";
 import { EXCLUDED } from "./lib/countries.js";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -24,6 +25,7 @@ app.use(express.static(join(__dirname, "public")));
 //  SHOPIFY API HELPERS
 // ============================================================
 async function getToken(shop, clientId, clientSecret) {
+  credentials({shop, clientId, clientSecret});
   const body = new URLSearchParams({
     grant_type: "client_credentials",
     client_id: clientId,
@@ -33,6 +35,7 @@ async function getToken(shop, clientId, clientSecret) {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
+    signal: AbortSignal.timeout(45000),
   });
   if (!res.ok) throw new Error(`Auth failed: ${res.status}`);
   return (await res.json()).access_token;
@@ -97,23 +100,7 @@ async function uploadFileBase64(base64, filename, tokenDest, shopDest) {
 }
 
 async function restPaginated(shop, path, token, key) {
-  const items = [];
-  let url = `https://${shop}/admin/api/${API_VERSION}${path}`;
-  while (url) {
-    let attempt = 0;
-    while (attempt < 5) {
-      const res = await fetch(url, { headers: { "X-Shopify-Access-Token": token } });
-      if (res.status === 429) { attempt++; await sleep(2000 * attempt); continue; }
-      if (!res.ok) throw new Error(`Erro ${res.status}`);
-      const data = await res.json();
-      (data[key] || []).forEach((i) => items.push(i));
-      const link = res.headers.get("link") || "";
-      const next = link.match(/<([^>]+)>;\s*rel="next"/);
-      url = next ? next[1] : null;
-      break;
-    }
-  }
-  return items;
+  return paginateShopify(shop, path, token, key, API_VERSION);
 }
 
 async function gql(shop, query, variables, token) {
@@ -168,7 +155,12 @@ app.post("/api/auth", async (req, res) => {
 //  API: CLONE (SSE — Server-Sent Events)
 // ============================================================
 app.post("/api/clone", async (req, res) => {
-  const { origin, destination, options, customize } = req.body;
+  const { origin, destination, options, customize } = req.body || {};
+  try {
+    credentials(origin); credentials(destination);
+    if(origin.shop.toLowerCase()===destination.shop.toLowerCase())throw new Error('Origem e destino precisam ser lojas diferentes.');
+    if(!options || !Object.values(options).some(v=>v===true))throw new Error('Selecione pelo menos um conteúdo.');
+  } catch(e) { return res.status(400).json({error:e.message}); }
 
   // Função que substitui nome da loja e email em qualquer texto
   function replaceContent(text) {
@@ -1335,8 +1327,9 @@ app.post("/api/store-import", async (req, res) => {
 
     step(100, "Concluído");
     log("\n🎉 Importação finalizada!");
+    emit({type:"done"});
   } catch(err) {
-    log("💥 " + err.message);
+    emit({type:"error",message:err.message});
   }
   res.end();
 });
@@ -1344,3 +1337,4 @@ app.post("/api/store-import", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`\n🔄 Shopify Store Cloner rodando na porta ${PORT}\n`);
 });
+

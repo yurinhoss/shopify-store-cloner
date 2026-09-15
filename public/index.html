@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Store Cloner</title>
+<title>Store Cloner · YDE</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iOCIgZmlsbD0iIzAwNjU0YiIvPjx0ZXh0IHg9IjE2IiB5PSIyMyIgZm9udC1zaXplPSIxOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiPvCflIQ8L3RleHQ+PC9zdmc+">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -137,104 +137,96 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 }
 </style>
 <link rel="stylesheet" href="/planner.css">
+<link rel="stylesheet" href="/workspace.css">
 </head>
 <body>
 
-<header class="header">
-  <div class="header-logo">
-    <div class="icon">🔄</div>
-    Store Cloner
-    <span class="header-badge">v2.0</span>
-  </div>
-  <div style="font-size:12px;color:var(--text3)">Shopify Store Management</div>
-</header>
-<!-- BANNER -->
-<div style="padding:16px 32px;background:var(--surface);border-bottom:1px solid var(--border);">
-  <img src="/banner.png" alt="Banner" style="width:100%;max-height:180px;object-fit:cover;object-position:center top;border-radius:10px;display:block;">
-</div>
-
-
+<a class="skip-link" href="#main-content">Pular para o conteúdo</a>
+<header class="header"><div><span class="eyebrow">YDE / OPERAÇÃO</span><h1 id="page-title">Clonar loja</h1></div><span class="header-badge">Shopify workspace</span></header>
+<aside class="sidebar"><div class="side-brand"><span class="brand-mark">S</span><div>Store Cloner<small>YDE · Gestão de lojas</small></div></div><div class="nav-caption">WORKSPACE</div>
 <div class="tabs-wrap">
   <div class="tabs">
-    <button class="tab-btn active" type="button" data-tab="clone">🔄 Clone Store</button>
-    <button class="tab-btn" type="button" data-tab="storeimport">🌐 Store Import</button>
-    <button class="tab-btn" type="button" data-tab="scopes">🔑 API Scopes</button>
-    <button class="tab-btn" type="button" data-tab="reset">🗑️ Resetar</button>
+    <button class="tab-btn active" type="button" data-tab="clone">Clonar loja</button>
+    <button class="tab-btn" type="button" data-tab="storeimport">Importar por URL</button>
+    <button class="tab-btn" type="button" data-tab="scopes">Permissões API</button>
+    <button class="tab-btn" type="button" data-tab="reset">Resetar loja</button>
   </div>
 </div>
+<div class="side-foot"><span class="brand-avatar">Y</span><div>YDE Business<small>Operação Shopify</small></div></div></aside>
 
-<div class="main">
+<main class="main" id="main-content">
+<div class="page-intro"><span class="eyebrow">SUAS LOJAS, CONECTADAS</span><h2 id="section-title">Prepare sua próxima loja.</h2><p id="section-description">Conecte origem e destino, escolha o conteúdo e acompanhe cada etapa da clonagem.</p></div>
 
   <!-- TAB CLONE -->
   <div id="tab-clone">
     <div class="stores-grid">
       <div class="store-card">
         <div class="store-card-header">
-          <span class="store-card-title">📤 Origin Store</span>
+          <span class="store-card-title"> Loja de origem</span>
           <span class="status-dot" id="dot-origin"></span>
         </div>
-        <div class="field"><label>Shop Domain</label><input id="orig-shop" placeholder="mystore.myshopify.com"></div>
-        <div class="field"><label>Client ID</label><input id="orig-id" placeholder="abc123..."></div>
-        <div class="field"><label>Client Secret</label><input id="orig-secret" type="password" placeholder="shpss_..."></div>
-        <button class="btn btn-ghost" onclick="testAuth('origin')">Test Connection</button>
+        <div class="field"><label for="orig-shop">Domínio Shopify</label><input id="orig-shop" placeholder="mystore.myshopify.com"></div>
+        <div class="field"><label for="orig-id">Client ID</label><input id="orig-id" placeholder="abc123..."></div>
+        <div class="field"><label for="orig-secret">Client Secret</label><input id="orig-secret" type="password" placeholder="shpss_..."></div>
+        <button class="btn btn-ghost" onclick="testAuth('origin')">Testar conexão</button>
         <div class="shop-info" id="info-origin"></div>
       </div>
       <div class="arrow-col">→</div>
       <div class="store-card">
         <div class="store-card-header">
-          <span class="store-card-title">📥 Destination Store</span>
+          <span class="store-card-title"> Loja de destino</span>
           <span class="status-dot" id="dot-dest"></span>
         </div>
-        <div class="field"><label>Shop Domain</label><input id="dest-shop" placeholder="newstore.myshopify.com"></div>
-        <div class="field"><label>Client ID</label><input id="dest-id" placeholder="abc123..."></div>
-        <div class="field"><label>Client Secret</label><input id="dest-secret" type="password" placeholder="shpss_..."></div>
-        <button class="btn btn-ghost" onclick="testAuth('dest')">Test Connection</button>
+        <div class="field"><label for="dest-shop">Domínio Shopify</label><input id="dest-shop" placeholder="newstore.myshopify.com"></div>
+        <div class="field"><label for="dest-id">Client ID</label><input id="dest-id" placeholder="abc123..."></div>
+        <div class="field"><label for="dest-secret">Client Secret</label><input id="dest-secret" type="password" placeholder="shpss_..."></div>
+        <button class="btn btn-ghost" onclick="testAuth('dest')">Testar conexão</button>
         <div class="shop-info" id="info-dest"></div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-header"><h3>✏️ Customize Destination</h3><p>Replace store name & email across all cloned content</p></div>
+      <div class="card-header"><h3> Personalizar destino</h3><p>Substitua o nome e o e-mail nos conteúdos clonados.</p></div>
       <div class="card-body">
         <div class="two-col">
           <div>
-            <div class="field"><label>Origin Store Name (find)</label><input id="origin-name" placeholder="Ex: My NFL Store"></div>
-            <div class="field"><label>Origin Email (find)</label><input id="origin-email" placeholder="Ex: support@store.com"></div>
+            <div class="field"><label for="origin-name">Nome atual da loja</label><input id="origin-name" placeholder="Ex: My NFL Store"></div>
+            <div class="field"><label for="origin-email">E-mail atual</label><input id="origin-email" placeholder="Ex: support@store.com"></div>
           </div>
           <div>
-            <div class="field"><label>New Store Name (replace)</label><input id="dest-name" placeholder="Ex: My New Store"></div>
-            <div class="field"><label>New Email (replace)</label><input id="dest-email" placeholder="Ex: help@newstore.com"></div>
+            <div class="field"><label for="dest-name">Novo nome da loja</label><input id="dest-name" placeholder="Ex: My New Store"></div>
+            <div class="field"><label for="dest-email">Novo e-mail</label><input id="dest-email" placeholder="Ex: help@newstore.com"></div>
           </div>
         </div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-header"><h3>📋 What to Clone</h3></div>
+      <div class="card-header"><h3> Conteúdo da clonagem</h3></div>
       <div class="card-body">
         <div class="options-grid">
-          <label class="option-item"><input type="checkbox" id="opt-products" checked> Products</label>
-          <label class="option-item"><input type="checkbox" id="opt-collections" checked> Collections</label>
-          <label class="option-item"><input type="checkbox" id="opt-pages" checked> Pages</label>
+          <label class="option-item"><input type="checkbox" id="opt-products" checked> Produtos</label>
+          <label class="option-item"><input type="checkbox" id="opt-collections" checked> Coleções</label>
+          <label class="option-item"><input type="checkbox" id="opt-pages" checked> Páginas</label>
           <label class="option-item"><input type="checkbox" id="opt-menus" checked> Menus</label>
-          <label class="option-item"><input type="checkbox" id="opt-policies" checked> Policies</label>
-          <label class="option-item"><input type="checkbox" id="opt-files" checked> Files / Images</label>
-          <label class="option-item"><input type="checkbox" id="opt-theme" checked> Theme</label>
-          <label class="option-item"><input type="checkbox" id="opt-markets" checked> 🌍 Markets</label>
-          <label class="option-item"><input type="checkbox" id="opt-shipping" checked> 🚚 Shipping</label>
-          <label class="option-item"><input type="checkbox" id="opt-discounts" checked> 🏷️ Discounts</label>
+          <label class="option-item"><input type="checkbox" id="opt-policies" checked> Políticas</label>
+          <label class="option-item"><input type="checkbox" id="opt-files" checked> Arquivos / imagens</label>
+          <label class="option-item"><input type="checkbox" id="opt-theme" checked> Tema</label>
+          <label class="option-item"><input type="checkbox" id="opt-markets" checked>  Markets</label>
+          <label class="option-item"><input type="checkbox" id="opt-shipping" checked>  Fretes</label>
+          <label class="option-item"><input type="checkbox" id="opt-discounts" checked>  Descontos</label>
         </div>
 
-        <!-- 📦 VALORES DE FRETE CUSTOMIZÁVEIS -->
+        <!--  VALORES DE FRETE CUSTOMIZÁVEIS -->
         <div id="shipping-values" style="margin-top:14px;padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--bg)">
-          <div style="font-size:13px;font-weight:600;margin-bottom:10px">🚚 Valores de Frete (em EUR — convertido automático pra moeda da loja)</div>
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px"> Valores de Frete (em EUR — convertido automático pra moeda da loja)</div>
           <div style="display:flex;gap:14px;flex-wrap:wrap">
             <div style="flex:1;min-width:160px">
-              <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px">📦 Frete Padrão</label>
+              <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px"> Frete Padrão</label>
               <input type="number" id="ship-standard" value="4.90" min="0" step="0.10" style="width:100%;padding:9px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box">
             </div>
             <div style="flex:1;min-width:160px">
-              <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px">⚡ Frete Expresso</label>
+              <label style="display:block;font-size:12px;color:var(--text2);margin-bottom:5px"> Frete Expresso</label>
               <input type="number" id="ship-express" value="7.90" min="0" step="0.10" style="width:100%;padding:9px;border:1.5px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px;box-sizing:border-box">
             </div>
           </div>
@@ -242,20 +234,20 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
       </div>
     </div>
 
-    <button class="btn btn-primary" id="btn-clone" onclick="startClone()">🚀 Start Cloning</button>
+    <button class="btn btn-primary" id="btn-clone" onclick="startClone()">Iniciar clonagem</button>
 
     <div class="progress-wrap" id="progress-wrap">
       <div class="card">
         <div class="card-header"><h3>⏳ Progress</h3></div>
         <div class="card-body">
-          <div class="progress-label"><span id="progress-step">Preparing...</span><span id="progress-pct">0%</span></div>
+          <div class="progress-label"><span id="progress-step">Preparando…</span><span id="progress-pct">0%</span></div>
           <div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-bar"></div></div>
           <div class="log-area" id="log-area"></div>
-          <div class="done-banner" id="done-banner"><h3>🎉 Cloning Complete!</h3><p>Open your destination store admin to verify all content.</p></div>
+          <div class="done-banner" id="done-banner"><h3> Cloning Complete!</h3><p>Open your destination store admin to verify all content.</p></div>
           <div class="checklist-wrap" id="checklist-wrap">
             <div class="checklist-head">
               <div>
-                <h3>📋 O que falta configurar manualmente</h3>
+                <h3> O que falta configurar manualmente</h3>
                 <p>A Shopify não deixa a API mexer nessas telas — marque conforme for fazendo (o progresso fica salvo)</p>
               </div>
               <span class="checklist-count" id="checklist-count"></span>
@@ -271,7 +263,7 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
   <div id="tab-storeimport" style="display:none">
     <div class="card">
       <div class="card-header">
-        <h3>🌐 Store Import via URL</h3>
+        <h3>Importar por URL via URL</h3>
         <p>Importa produtos, coleções, páginas e imagens de banner de qualquer loja Shopify usando só a URL pública (sem precisar de credenciais da loja de origem).</p>
       </div>
       <div class="card-body">
@@ -282,20 +274,20 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
         </div>
 
         <p style="font-size:12px;color:var(--text3);margin:6px 0 18px">
-          💡 A loja destino usa as credenciais da <b>Destination Store</b> preenchidas na aba Clone Store.
+           A loja destino usa as credenciais da <b>Loja de destino</b> preenchidas na aba Clonar loja.
         </p>
 
-        <div style="font-size:13px;font-weight:600;margin:14px 0 10px">📋 O que importar</div>
+        <div style="font-size:13px;font-weight:600;margin:14px 0 10px"> O que importar</div>
         <div class="options-grid">
           <label class="option-item"><input type="checkbox" id="si-opt-products" checked> Produtos</label>
           <label class="option-item"><input type="checkbox" id="si-opt-collections" checked> Coleções</label>
           <label class="option-item"><input type="checkbox" id="si-opt-pages" checked> Páginas</label>
-          <label class="option-item"><input type="checkbox" id="si-opt-banners" checked> 🖼️ Banners da Home</label>
+          <label class="option-item"><input type="checkbox" id="si-opt-banners" checked>  Banners da Home</label>
         </div>
 
         <!-- Filtros e regras -->
         <div id="si-rules" style="margin-top:14px;padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--bg)">
-          <div style="font-size:13px;font-weight:600;margin-bottom:10px">💰 Regras de preço &amp; estoque (para produtos)</div>
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px"> Regras de preço &amp; estoque (para produtos)</div>
 
           <div style="display:flex;gap:14px;flex-wrap:wrap">
             <div style="flex:1;min-width:160px">
@@ -323,10 +315,10 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
           </div>
         </div>
 
-        <button class="btn btn-primary" id="btn-si-start" onclick="startStoreImport()" style="margin-top:16px">🚀 Importar da URL</button>
+        <button class="btn btn-primary" id="btn-si-start" onclick="startStoreImport()" style="margin-top:16px"> Importar da URL</button>
 
         <div class="progress-wrap" id="si-progress-wrap" style="display:none;margin-top:16px">
-          <div class="progress-label"><span id="si-progress-step">Preparing...</span><span id="si-progress-pct">0%</span></div>
+          <div class="progress-label"><span id="si-progress-step">Preparando…</span><span id="si-progress-pct">0%</span></div>
           <div class="progress-bar-bg"><div class="progress-bar-fill" id="si-progress-bar"></div></div>
           <div class="log-area" id="si-log-area" style="margin-top:12px"></div>
         </div>
@@ -337,11 +329,11 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
   <!-- TAB SCOPES -->
   <div id="tab-scopes" style="display:none">
     <div class="card">
-      <div class="card-header"><h3>🔑 Shopify API Access Scopes</h3><p>Copie todos os 154 escopos de uma vez e cole na configuração do seu app Shopify (Admin API access scopes)</p></div>
+      <div class="card-header"><h3> Shopify API Access Scopes</h3><p>Copie todos os 154 escopos de uma vez e cole na configuração do seu app Shopify (Admin API access scopes)</p></div>
       <div class="card-body">
-        <button class="btn btn-primary" id="btn-copy-scopes" onclick="copyScopes()" style="margin-bottom:16px">📋 Copiar Todos os Escopos (154)</button>
+        <button class="btn btn-primary" id="btn-copy-scopes" onclick="copyScopes()" style="margin-bottom:16px"> Copiar Todos os Escopos (154)</button>
         <textarea id="scopes-text" readonly style="width:100%;height:280px;padding:14px;border:1.5px solid var(--border);border-radius:10px;background:var(--bg);color:var(--text2);font-family:'SF Mono',monospace;font-size:11px;line-height:1.7;resize:vertical;outline:none">read_all_orders,read_analytics,read_app_proxy,write_app_proxy,read_apps,read_assigned_fulfillment_orders,write_assigned_fulfillment_orders,read_audit_events,read_customer_events,read_cart_transforms,write_cart_transforms,read_all_cart_transforms,read_validations,write_validations,read_cash_tracking,write_cash_tracking,read_channels,write_channels,read_companies,write_companies,read_custom_fulfillment_services,write_custom_fulfillment_services,read_price_rules,write_price_rules,read_discounts,write_discounts,read_discounts_allocator_functions,write_discounts_allocator_functions,read_discovery,write_discovery,read_files,write_files,read_fulfillment_constraint_rules,write_fulfillment_constraint_rules,read_fulfillments,write_fulfillments,read_gift_card_transactions,write_gift_card_transactions,read_gift_cards,write_gift_cards,write_inventory,read_inventory,write_inventory_shipments,read_inventory_shipments,write_inventory_shipments_received_items,read_inventory_shipments_received_items,write_inventory_transfers,read_inventory_transfers,read_legal_policies,write_legal_policies,read_delivery_option_generators,write_delivery_option_generators,read_locales,write_locales,write_locations,read_locations,read_marketing_integrated_campaigns,write_marketing_integrated_campaigns,write_marketing_events,read_marketing_events,read_markets,write_markets,read_markets_home,write_markets_home,read_merchant_managed_fulfillment_orders,write_merchant_managed_fulfillment_orders,read_metaobject_definitions,write_metaobject_definitions,read_metaobjects,write_metaobjects,read_online_store_navigation,write_online_store_navigation,read_online_store_pages,write_online_store_pages,write_order_edits,read_order_edits,read_orders,write_orders,write_packing_slip_templates,read_packing_slip_templates,read_privacy_settings,write_privacy_settings,read_product_feeds,write_product_feeds,read_product_listings,write_product_listings,read_products,write_products,read_publications,write_publications,read_purchase_options,write_purchase_options,write_reports,read_reports,read_resource_feedbacks,write_resource_feedbacks,read_returns,write_returns,read_script_tags,write_script_tags,read_shopify_payments_provider_accounts_sensitive,read_shipping,write_shipping,read_shopify_payments_accounts,read_shopify_payments_payouts,read_shopify_payments_bank_accounts,read_shopify_payments_disputes,write_shopify_payments_disputes,read_content,write_content,read_store_credit_account_transactions,read_store_credit_accounts,write_own_subscription_contracts,read_own_subscription_contracts,write_theme_code,read_themes,write_themes,read_third_party_fulfillment_orders,write_third_party_fulfillment_orders,read_translations,write_translations,read_pixels,write_pixels,customer_read_companies,customer_write_companies,customer_write_customers,customer_read_customers,customer_read_draft_orders,customer_read_markets,customer_read_metaobjects,customer_read_orders,customer_write_orders,customer_read_quick_sale,customer_write_quick_sale,customer_read_store_credit_account_transactions,customer_read_store_credit_accounts,customer_write_own_subscription_contracts,customer_read_own_subscription_contracts,unauthenticated_write_bulk_operations,unauthenticated_read_bulk_operations,unauthenticated_read_bundles,unauthenticated_write_checkouts,unauthenticated_read_checkouts,unauthenticated_write_customers,unauthenticated_read_customers,unauthenticated_read_customer_tags,unauthenticated_read_metaobjects,unauthenticated_read_product_pickup_locations,unauthenticated_read_product_inventory,unauthenticated_read_product_listings,unauthenticated_read_product_tags,unauthenticated_read_selling_plans,unauthenticated_read_shop_pay_installments_pricing,unauthenticated_read_content</textarea>
-        <p style="font-size:12px;color:var(--text3);margin-top:12px">💡 Cole em: <strong>Shopify Admin → Settings → Apps and sales channels → Develop apps → [seu app] → Configuration → Admin API access scopes</strong></p>
+        <p style="font-size:12px;color:var(--text3);margin-top:12px"> Cole em: <strong>Shopify Admin → Settings → Apps and sales channels → Develop apps → [seu app] → Configuration → Admin API access scopes</strong></p>
       </div>
     </div>
   </div>
@@ -349,33 +341,11 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 </div>
 
   <!-- TAB RESET -->
-  <div id="tab-reset" style="display:none">
-    <div class="card">
-      <div class="card-header"><h3>🗑️ Resetar etapas da loja DESTINO</h3><p>Apaga o que foi clonado errado para poder clonar de novo do zero (ex: moeda errada)</p></div>
-      <div class="card-body">
-        <div class="reset-warn">
-          ⚠️ <b>Atenção:</b> isso apaga de verdade, direto na Shopify, e não tem "desfazer".
-          Usa as credenciais da <b>Destination Store</b> preenchidas na aba Clone Store.
-          O market principal, zonas de frete com nome personalizado e menus padrão do sistema são preservados.
-        </div>
-        <div class="rst-grid">
-          <label class="rst-opt"><input type="checkbox" id="rst-markets"><div><div class="rst-t">🌍 Markets</div><div class="rst-d">Apaga todos os mercados. O principal fica (a Shopify não deixa apagar).</div></div></label>
-          <label class="rst-opt"><input type="checkbox" id="rst-fretes"><div><div class="rst-t">🚚 Fretes</div><div class="rst-d">Apaga as zonas criadas pelo clone (nome de 2 letras). Zonas com nome personalizado ficam.</div></div></label>
-          <label class="rst-opt"><input type="checkbox" id="rst-arquivos"><div><div class="rst-t">🖼️ Arquivos</div><div class="rst-d">Apaga fotos e vídeos soltos (duplicatas, banners). Fotos em uso pelos produtos são protegidas.</div></div></label>
-          <label class="rst-opt"><input type="checkbox" id="rst-colecoes"><div><div class="rst-t">📚 Coleções</div><div class="rst-d">Apaga todas as coleções, automáticas (smart) e manuais (custom).</div></div></label>
-          <label class="rst-opt"><input type="checkbox" id="rst-paginas"><div><div class="rst-t">📄 Páginas</div><div class="rst-d">Apaga todas as páginas (sobre, contato, rastreamento, etc).</div></div></label>
-          <label class="rst-opt"><input type="checkbox" id="rst-menus"><div><div class="rst-t">📑 Menus</div><div class="rst-d">Apaga os menus de navegação. Os padrão do sistema ficam.</div></div></label>
-          <label class="rst-opt"><input type="checkbox" id="rst-descontos"><div><div class="rst-t">🎟️ Descontos</div><div class="rst-d">Apaga todos os cupons e regras de desconto.</div></div></label>
-          <label class="rst-opt perigo"><input type="checkbox" id="rst-produtos"><div><div class="rst-t">⚠️ Produtos</div><div class="rst-d">Apaga TODOS os produtos da loja. Pede confirmação extra digitando o nome da loja.</div></div></label>
-        </div>
-        <button class="btn btn-danger" id="btn-reset" onclick="startReset()">🗑️ Apagar selecionados da loja destino</button>
-        <div class="log-area" id="reset-log-area" style="margin-top:14px"></div>
-      </div>
-    </div>
-  </div>
+  <div id="tab-reset" style="display:none"><p class="unavailable">Reset indisponível nesta versão. Use o administrador Shopify para excluir conteúdo.</p></div>
 
 
-
+</main>
+<script src="/streams.js"></script>
 <script>
 // ============================================================
 //  ABAS — registro central
@@ -412,14 +382,14 @@ function copyScopes(){
 }
 function getStoreData(prefix) {
   const p = prefix==='origin'?'orig':'dest';
-  return { shop: document.getElementById(`${p}-shop`).value.trim(), clientId: document.getElementById(`${p}-id`).value.trim(), clientSecret: document.getElementById(`${p}-secret`).value.trim() };
+  return { shop: document.getElementById(`${p}-shop`).value.trim().replace(/^https?:\/\//i, '').replace(/\/$/, '').toLowerCase(), clientId: document.getElementById(`${p}-id`).value.trim(), clientSecret: document.getElementById(`${p}-secret`).value.trim() };
 }
 async function testAuth(which) {
   const data = getStoreData(which);
   const dot = document.getElementById(`dot-${which==='origin'?'origin':'dest'}`);
   const info = document.getElementById(`info-${which==='origin'?'origin':'dest'}`);
-  if (!data.shop||!data.clientId||!data.clientSecret){info.textContent='⚠️ Fill all fields';return;}
-  info.textContent='Connecting...';dot.className='status-dot';
+  if (!data.shop||!data.clientId||!data.clientSecret){info.textContent='Preencha todos os campos';return;}
+  info.textContent='Conectando…';dot.className='status-dot';
   try {
     const res=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
     const r=await res.json();
@@ -433,64 +403,39 @@ let _cloneReader = null;
 async function startClone() {
   const origin=getStoreData('origin'),destination=getStoreData('dest');
   const customize={originName:document.getElementById('origin-name').value.trim(),originEmail:document.getElementById('origin-email').value.trim(),destName:document.getElementById('dest-name').value.trim(),destEmail:document.getElementById('dest-email').value.trim()};
-  if(!origin.shop||!destination.shop){alert('Fill in both store credentials');return;}
+  if (![origin,destination].every(s=>s.shop&&s.clientId&&s.clientSecret)) { alert('Preencha domínio, Client ID e Client Secret das duas lojas.'); return; }
+  if(origin.shop===destination.shop){alert('Origem e destino precisam ser lojas diferentes.');return;}
   const options={products:document.getElementById('opt-products').checked,collections:document.getElementById('opt-collections').checked,pages:document.getElementById('opt-pages').checked,menus:document.getElementById('opt-menus').checked,policies:document.getElementById('opt-policies').checked,files:document.getElementById('opt-files').checked,theme:document.getElementById('opt-theme').checked,markets:document.getElementById('opt-markets').checked,shipping:document.getElementById('opt-shipping').checked,discounts:document.getElementById('opt-discounts').checked};
 
+  if(!Object.values(options).some(Boolean)){alert('Selecione pelo menos um conteúdo para clonar.');return;}
   // 📦 Captura os valores de frete escolhidos (em EUR)
   const shippingCosts={
-    standard: parseFloat(document.getElementById('ship-standard').value) || 4.90,
-    express: parseFloat(document.getElementById('ship-express').value) || 7.90
+    standard: Number(document.getElementById('ship-standard').value),
+    express: Number(document.getElementById('ship-express').value)
   };
-  if(shippingCosts.standard<=0||shippingCosts.express<=0){alert('❌ Valores de frete devem ser maiores que 0');return;}
-  const btn=document.getElementById('btn-clone');btn.disabled=true;btn.textContent='⏳ Cloning in progress...';
+  if(options.shipping&&(!Number.isFinite(shippingCosts.standard)||!Number.isFinite(shippingCosts.express)||shippingCosts.standard<0||shippingCosts.express<0)){alert('❌ Valores de frete devem ser zero ou maiores');return;}
+  const btn=document.getElementById('btn-clone');btn.disabled=true;btn.textContent='Clonagem em andamento…';
   const wrap=document.getElementById('progress-wrap'),logArea=document.getElementById('log-area'),bar=document.getElementById('progress-bar'),step=document.getElementById('progress-step'),pct=document.getElementById('progress-pct'),done=document.getElementById('done-banner');
-  wrap.classList.add('active');logArea.innerHTML='';done.classList.remove('active');
+  wrap.classList.add('active');logArea.innerHTML='';done.classList.remove('active');bar.style.width='0%';pct.textContent='0%';step.textContent='Iniciando…';document.getElementById('checklist-wrap')?.classList.remove('active');
 
   try {
     const response = await fetch('/api/clone',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({origin,destination,options,customize,shippingCosts})});
-    if (!response.ok) throw new Error('Não foi possível iniciar a clonagem: HTTP ' + response.status);
+    if (!response.ok) {const error=await response.json().catch(()=>({}));throw new Error(error.error||'Não foi possível iniciar a clonagem: HTTP '+response.status);}
     await connectToJob(null, logArea, bar, step, pct, done, response);
   } catch(err) {
     const d=document.createElement('div');d.className='log-line error';d.textContent='💥 '+err.message;logArea.appendChild(d);
   }
-  btn.disabled=false;btn.textContent='🚀 Start Cloning';
+  btn.disabled=false;btn.textContent='Iniciar clonagem';
 }
 
 async function connectToJob(jobId, logArea, bar, step, pct, done, response) {
-  const res = response || await fetch('/api/clone-status/'+jobId);
-  const reader = res.body.getReader();
-  _cloneReader = reader;
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  try {
-    while(true) {
-      const {done:rd, value} = await reader.read();
-      if(rd) break;
-      buffer += decoder.decode(value, {stream:true});
-      const lines = buffer.split('\n'); buffer = lines.pop();
-      for(const line of lines) {
-        if(line.startsWith(':')) continue; // keepalive
-        if(!line.startsWith('data: ')) continue;
-        try {
-          const data = JSON.parse(line.slice(6));
-          if(data.type==='log'){const d=document.createElement('div');d.className=`log-line ${data.status||'info'}`;d.textContent=data.msg;logArea.appendChild(d);logArea.scrollTop=logArea.scrollHeight;}
-          if(data.type==='progress'){const p=Math.round(data.current/data.total*100);bar.style.width=p+'%';step.textContent=`${data.step} (${data.current}/${data.total})`;pct.textContent=p+'%';}
-          if(data.type==='checklist'){renderChecklist(data);}
-          if(data.type==='done'){done.classList.add('active');bar.style.width='100%';pct.textContent='100%';step.textContent='Complete!';return;}
-          if(data.type==='error'){const d=document.createElement('div');d.className='log-line error';d.textContent=data.msg;logArea.appendChild(d);}
-        } catch {}
-      }
-    }
-  } catch(err) {
-    // Conexão caiu — reconecta automaticamente após 3s
-    if(response) throw new Error("Conexão interrompida. Verifique a loja antes de repetir a clonagem.");
-    if(jobId && _cloneJobId === jobId) {
-      const d=document.createElement('div');d.className='log-line';d.textContent='⚠️ Conexão perdida, reconectando em 3s...';logArea.appendChild(d);
-      await new Promise(r=>setTimeout(r,3000));
-      await connectToJob(jobId, logArea, bar, step, pct, done);
-    }
-  }
+  let errors = 0;
+  await readOperationStream(response, 'sse', data => {
+    if(data.type==='log') { const d=document.createElement('div'); d.className=`log-line ${data.status||'info'}`;d.textContent=data.msg;logArea.appendChild(d);logArea.scrollTop=logArea.scrollHeight;if(data.status==='error')errors++; }
+    if(data.type==='progress') {const p=data.total>0?Math.min(100,Math.round(data.current/data.total*100)):0;bar.style.width=p+'%';pct.textContent=p+'%';step.textContent=data.step;}
+    if(data.type==='checklist')renderChecklist(data);
+    if(data.type==='done'){done.classList.add('active');bar.style.width='100%';pct.textContent='100%';step.textContent=errors?'Finalizado com pendências':'Concluído';done.querySelector('h3').textContent=errors?'Finalizado com pendências':'Clonagem concluída';done.querySelector('p').textContent=errors?'Revise os erros no registro antes de repetir a operação.':'Confira a loja de destino e o checklist abaixo.';}
+  });
 }
 // ============================================================
 //  CHECKLIST PÓS-CLONE
@@ -498,6 +443,8 @@ async function connectToJob(jobId, logArea, bar, step, pct, done, response) {
 //  está OK, e salva o que você marcar no navegador (localStorage)
 //  — se fechar a página e voltar, continua marcado.
 // ============================================================
+function escapeHTML(value) {return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function safeChecklistURL(value) {try{const url=new URL(value);return url.protocol==='https:'?url.href:'#';}catch{return '#';}}
 function renderChecklist(data) {
   const wrap = document.getElementById('checklist-wrap');
   const cont = document.getElementById('checklist-items');
@@ -519,10 +466,10 @@ function renderChecklist(data) {
     div.innerHTML =
       '<input type="checkbox" class="ck-check"' + (marcado ? ' checked' : '') + '>' +
       '<div class="ck-body">' +
-        '<div class="ck-titulo">' + item.titulo + (item.auto ? '<span class="ck-auto">✓ detectado OK</span>' : '') + '</div>' +
+        '<div class="ck-titulo">' + escapeHTML(item.titulo) + (item.auto ? '<span class="ck-auto">✓ detectado OK</span>' : '') + '</div>' +
         '<div class="ck-desc"></div>' +
       '</div>' +
-      '<a class="ck-abrir" href="' + item.url + '" target="_blank">Abrir ↗</a>';
+      '<a class="ck-abrir" href="' + escapeHTML(safeChecklistURL(item.url)) + '" target="_blank" rel="noopener noreferrer">Abrir ↗</a>';
     div.querySelector('.ck-desc').textContent = item.desc; // textContent evita quebrar o HTML
     div.querySelector('.ck-check').addEventListener('change', function() {
       div.classList.toggle('feito', this.checked);
@@ -535,75 +482,6 @@ function renderChecklist(data) {
   atualizaContador();
   wrap.classList.add('active');
 }
-
-// ============================================================
-//  RESET DE ETAPAS — apaga da loja destino pra reclonar do zero
-// ============================================================
-document.addEventListener('change', function(e) {
-  if (e.target.matches('.rst-opt input')) e.target.closest('.rst-opt').classList.toggle('marcado', e.target.checked);
-});
-
-async function startReset() {
-  const destination = getStoreData('dest');
-  if (!destination.shop || !destination.clientId || !destination.clientSecret) {
-    alert('Preenche as credenciais da Destination Store na aba Clone Store primeiro!');
-    switchTab('clone');
-    return;
-  }
-
-  const etapas = {
-    markets: document.getElementById('rst-markets').checked,
-    fretes: document.getElementById('rst-fretes').checked,
-    arquivos: document.getElementById('rst-arquivos').checked,
-    colecoes: document.getElementById('rst-colecoes').checked,
-    paginas: document.getElementById('rst-paginas').checked,
-    menus: document.getElementById('rst-menus').checked,
-    descontos: document.getElementById('rst-descontos').checked,
-    produtos: document.getElementById('rst-produtos').checked,
-  };
-  const nomes = { markets:'Markets', fretes:'Fretes', arquivos:'Arquivos (fotos/vídeos soltos)', colecoes:'Coleções', paginas:'Páginas', menus:'Menus', descontos:'Descontos', produtos:'⚠️ TODOS OS PRODUTOS' };
-  const escolhidas = Object.keys(etapas).filter(k => etapas[k]).map(k => nomes[k]);
-  if (escolhidas.length === 0) { alert('Marca pelo menos uma etapa pra apagar.'); return; }
-
-  // Confirmação — e dupla se produtos estiver marcado
-  if (!confirm('Vai APAGAR da loja ' + destination.shop + ':\n\n• ' + escolhidas.join('\n• ') + '\n\nIsso não tem desfazer. Continuar?')) return;
-  if (etapas.produtos) {
-    const digitado = prompt('Pra confirmar que quer apagar TODOS os produtos, digita o nome da loja:\n' + destination.shop);
-    if (digitado !== destination.shop) { alert('Nome não confere — reset cancelado.'); return; }
-  }
-
-  const logArea = document.getElementById('reset-log-area');
-  logArea.innerHTML = '';
-  document.getElementById('btn-reset').disabled = true;
-
-  try {
-    const startRes = await fetch('/api/reset-start', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ destination, etapas }) });
-    const { jobId } = await startRes.json();
-
-    const res = await fetch('/api/clone-status/' + jobId);
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true) {
-      const { done: fim, value } = await reader.read();
-      if (fim) break;
-      buffer += decoder.decode(value, { stream: true });
-      const linhas = buffer.split('\n\n');
-      buffer = linhas.pop();
-      for (const linha of linhas) {
-        if (!linha.startsWith('data: ')) continue;
-        let data; try { data = JSON.parse(linha.slice(6)); } catch { continue; }
-        if (data.type === 'log') { const d=document.createElement('div'); d.className='log-line '+(data.status||'info'); d.textContent=data.msg; logArea.appendChild(d); logArea.scrollTop=logArea.scrollHeight; }
-        if (data.type === 'done') { const d=document.createElement('div'); d.className='log-line success'; d.textContent=data.msg; logArea.appendChild(d); }
-        if (data.type === 'error') { const d=document.createElement('div'); d.className='log-line error'; d.textContent=data.msg; logArea.appendChild(d); }
-      }
-    }
-  } catch (err) {
-    const d=document.createElement('div'); d.className='log-line error'; d.textContent='💥 '+err.message; logArea.appendChild(d);
-  }
-  document.getElementById('btn-reset').disabled = false;
-}
-
 
 // ============================================================
 //  STORE IMPORT — importa via URL pública (streaming SSE)
@@ -624,7 +502,7 @@ async function startStoreImport(){
   if (!url){ alert('Cole a URL da loja de origem'); return; }
   const destination = getStoreData('dest');
   if (!destination.shop || !destination.clientId || !destination.clientSecret){
-    alert('Preencha as credenciais da Destination Store (aba Clone Store) primeiro.');
+    alert('Preencha as credenciais da Loja de destino (aba Clonar loja) primeiro.');
     return;
   }
 
@@ -647,6 +525,8 @@ async function startStoreImport(){
     },
   };
 
+  if(!Object.values(payload.options).some(Boolean)){alert('Selecione pelo menos um conteúdo para importar.');return;}
+  for(const id of ['si-discount','si-stock','si-limit'])if(!document.getElementById(id).reportValidity())return;
   const btn = document.getElementById('btn-si-start');
   btn.disabled = true;
   btn.textContent = '⏳ Importando...';
@@ -665,25 +545,10 @@ async function startStoreImport(){
       siLog('💥 Erro: ' + txt.slice(0, 300));
       return;
     }
-    // Lê stream de eventos (SSE — o server manda linha por linha)
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true){
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // guarda a última linha incompleta
-      for (const line of lines){
-        if (!line.trim()) continue;
-        try {
-          const ev = JSON.parse(line);
-          if (ev.log) siLog(ev.log);
-          if (typeof ev.pct === 'number') siProgress(ev.pct, ev.step);
-        } catch { /* linha não-JSON, ignora */ }
-      }
-    }
+    await readOperationStream(res, 'ndjson', ev => {
+      if(ev.log)siLog(ev.log);
+      if(typeof ev.pct==='number')siProgress(ev.pct,ev.step);
+    });
     siLog('✅ Fim.');
   } catch(err){
     siLog('💥 ' + err.message);
@@ -694,5 +559,7 @@ async function startStoreImport(){
 }
 </script>
 <script src="/planner.js"></script>
+<script src="/workspace.js"></script>
 </body>
 </html>
+
