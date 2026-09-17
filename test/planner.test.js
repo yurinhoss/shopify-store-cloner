@@ -4,6 +4,7 @@ import {COUNTRIES,EXCLUDED,selectCountries,resolveLocale,shippingNames} from '..
 import {prepare,ensureMarket,ensureShipping,checkPayload,money,credentials,readMarkets} from '../lib/planner.js';
 const country=code=>COUNTRIES.find(c=>c.code===code);
 const locales=(...codes)=>codes.map(locale=>({locale,published:true,name:locale}));
+const currencies={__type:{enumValues:['EUR','USD','JPY','BRL'].map(name=>({name}))}};
 const connection=nodes=>({nodes,pageInfo:{hasNextPage:false,endCursor:null}});
 test('complete catalog, unique countries and all 50 exclusions enforced on the server',()=>{
  assert.equal(COUNTRIES.length,249);assert.equal(new Set(COUNTRIES.map(c=>c.code)).size,249);assert.equal(EXCLUDED.size,50);
@@ -33,7 +34,7 @@ test('idioma é escolhido automaticamente e nunca troca variantes de português'
 });
 test('prévia de Markets não gera pendência bloqueante quando falta o idioma local',async()=>{
  const call=async q=>{
-  if(q.includes('PlannerShop'))return {shop:{name:'Test',currencyCode:'JPY'}};
+  if(q.includes('PlannerCurrencies'))return currencies; if(q.includes('PlannerMarketPresence'))return {market:{webPresences:connection([])}}; if(q.includes('PlannerShop'))return {shop:{name:'Test',currencyCode:'JPY'}};
   if(q.includes('PlannerLocales'))return {shopLocales:locales('en')};
   return {markets:connection([])};
  };
@@ -57,11 +58,11 @@ test('market pagination preserves individual markets after the first page',async
  let calls=0;const rows=await readMarkets(async(q,v)=>{calls++;return {markets:{nodes:[{id:String(calls)}],pageInfo:{hasNextPage:calls===1,endCursor:'next'}}};});assert.equal(calls,2);assert.equal(rows.length,2);
 });
 test('preview is read only and identifies existing individual markets',async()=>{
- const call=async q=>{assert.ok(!q.includes('mutation'));if(q.includes('PlannerShop'))return {shop:{name:'Test',currencyCode:'EUR'}};if(q.includes('PlannerLocales'))return {shopLocales:locales('en','pt-PT')};return {markets:connection([{id:'pt',regions:connection([{code:'PT'}])}])};};
+ const call=async q=>{assert.ok(!q.includes('mutation'));if(q.includes('PlannerCurrencies'))return currencies; if(q.includes('PlannerMarketPresence'))return {market:{webPresences:connection([])}}; if(q.includes('PlannerShop'))return {shop:{name:'Test',currencyCode:'EUR'}};if(q.includes('PlannerLocales'))return {shopLocales:locales('en','pt-PT')};return {markets:connection([{id:'pt',regions:connection([{code:'PT'}])}])};};
  const p=await prepare(call,{mode:'markets',countries:['PT']});assert.equal(p.rows[0].marketId,'pt');assert.equal(p.rows[0].locale.primary,'pt-PT');
 });
 function shippingCall(zones,methods=[]) {return async q=>{
- if(q.includes('PlannerShop'))return {shop:{name:'Test',currencyCode:'EUR'}};
+ if(q.includes('PlannerCurrencies'))return currencies; if(q.includes('PlannerMarketPresence'))return {market:{webPresences:connection([])}}; if(q.includes('PlannerShop'))return {shop:{name:'Test',currencyCode:'EUR'}};
  if(q.includes('PlannerProfiles'))return {deliveryProfiles:connection([{id:'profile',name:'General',default:true,profileLocationGroups:[{locationGroup:{id:'group',locations:connection([{id:'loc',name:'Warehouse'}])}}]}])};
  if(q.includes('PlannerZones'))return {deliveryProfile:{profileLocationGroups:[{locationGroupZones:connection(zones.map((codes,i)=>({zone:{id:String(i),countries:codes.map(code=>({code:{countryCode:code,restOfWorld:false}}))},methodDefinitions:connection(methods)})))}]}};
  throw new Error(q);
@@ -76,19 +77,19 @@ test('existing methods are updated by ID without deleting unrelated methods',asy
  const zone=variables.profile.locationGroupsToUpdate[0].zonesToUpdate[0];assert.equal(zone.methodDefinitionsToCreate.length,0);assert.deepEqual(zone.methodDefinitionsToUpdate.map(m=>m.id),['standard','express']);assert.ok(!zone.methodDefinitionsToDelete);
 });
 test('repeat market apply reuses web presence and market, and never writes excluded countries through preview',async()=>{
- const mutations=[];const call=async(q,v)=>{if(q.includes('PlannerPresences'))return {webPresences:connection([{id:'web',subfolderSuffix:'pt',defaultLocale:{locale:'pt-PT'},alternateLocales:[{locale:'en'}]}])};mutations.push(v);return {marketUpdate:{market:{id:'market'},userErrors:[]}};};
+ const mutations=[];const call=async(q,v)=>{if(q.includes('PlannerMarketPresence'))return {market:{webPresences:connection([])}};if(q.includes('PlannerPresences'))return {webPresences:connection([{id:'web',subfolderSuffix:'pt',defaultLocale:{locale:'pt-PT'},alternateLocales:[{locale:'en'}]}])};mutations.push(v);return {marketUpdate:{market:{id:'market',currencySettings:{baseCurrency:{currencyCode:'EUR'},localCurrencies:false},webPresences:connection([{id:'web',defaultLocale:{locale:'pt-PT'},alternateLocales:[{locale:'en'}],rootUrls:[]}])},userErrors:[]}};};
  await ensureMarket(call,{...country('PT'),marketId:'market',locale:resolveLocale(country('PT'),locales('en','pt-PT'))});
- assert.equal(mutations.length,1);assert.equal(mutations[0].id,'market');assert.deepEqual(mutations[0].input.webPresences,['web']);assert.equal(mutations[0].input.currencySettings.localCurrencies,true);
+ assert.equal(mutations.length,1);assert.equal(mutations[0].id,'market');assert.deepEqual(mutations[0].input.webPresencesToAdd,['web']);assert.equal(mutations[0].input.currencySettings.localCurrencies,false);
 });
 import express from 'express';
 import {registerPlanner} from '../lib/planner.js';
 test('HTTP preview/apply validates destination, rejects replay and reports mutation errors',async()=>{
  const app=express();app.use(express.json());let writes=0;
  const fake=async(shop,token,q)=>{
-  if(q.includes('PlannerShop'))return {shop:{name:'Test',currencyCode:'EUR'}};
+  if(q.includes('PlannerCurrencies'))return currencies; if(q.includes('PlannerMarketPresence'))return {market:{webPresences:connection([])}}; if(q.includes('PlannerShop'))return {shop:{name:'Test',currencyCode:'EUR'}};
   if(q.includes('PlannerLocales'))return {shopLocales:locales('en','pt-PT')};
   if(q.includes('PlannerMarkets'))return {markets:connection([{id:'market',regions:connection([{code:'PT'}])}])};
-  if(q.includes('PlannerPresences'))return {webPresences:connection([{id:'web',subfolderSuffix:'pt',defaultLocale:{locale:'pt-PT'},alternateLocales:[{locale:'en'}]}])};
+  if(q.includes('PlannerMarketPresence'))return {market:{webPresences:connection([])}};if(q.includes('PlannerPresences'))return {webPresences:connection([{id:'web',subfolderSuffix:'pt',defaultLocale:{locale:'pt-PT'},alternateLocales:[{locale:'en'}]}])};
   if(q.includes('PlannerUpdate')){writes++;return {marketUpdate:{userErrors:[{message:'Test mutation rejected'}]}};}
   throw new Error(q);
  };
@@ -104,3 +105,4 @@ test('HTTP preview/apply validates destination, rejects replay and reports mutat
   const replay=await post('/api/planner/apply',{destination,id:plan.id});assert.equal(replay.status,400);assert.equal(writes,1);
  }finally {server.closeAllConnections();await new Promise(r=>server.close(r));}
 });
+

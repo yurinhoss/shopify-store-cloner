@@ -4,9 +4,10 @@
 // ============================================================
 
 import express from "express";
+import {setProductStock, stockQuantity} from "./lib/inventory.js";
 import {registerReset} from "./lib/reset.js";
 import { paginateShopify } from "./lib/pagination.js";
-import { registerPlanner, exchangeRate, money, checkPayload, credentials } from "./lib/planner.js";
+import { registerPlanner, exchangeRate, money, checkPayload, credentials, prepare, ensureMarket } from "./lib/planner.js";
 import { EXCLUDED } from "./lib/countries.js";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -22,6 +23,7 @@ app.use(express.json({ limit: "1mb" }));
 registerPlanner(app, getToken);
 registerReset(app, {getToken, gql, restCall, restPaginated, sleep});
 app.use(express.static(join(__dirname, "public")));
+app.get("/api/health",(_req,res)=>res.json({ok:true,release:"markets-inventory-2026-09-16",revision:process.env.RAILWAY_GIT_COMMIT_SHA||null}));
 
 // ============================================================
 //  SHOPIFY API HELPERS
@@ -50,6 +52,7 @@ async function restCall(method, shop, path, token, body = null) {
       method,
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
     };
+    opts.signal = AbortSignal.timeout(45000);
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(`https://${shop}/admin/api/${API_VERSION}${path}`, opts);
     if (res.status === 429) { attempt++; await sleep(2000 * attempt); continue; }
@@ -113,6 +116,7 @@ async function gql(shop, query, variables, token) {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
       body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(45000),
     });
     if (res.status === 429) { await sleep(1000 * (attempt + 1)); continue; }
     if (!res.ok) throw new Error(`Shopify HTTP ${res.status}. Verifique as permissões do app.`);
@@ -182,7 +186,7 @@ app.post("/api/clone", async (req, res) => {
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
 
   const send = (type, data) => {
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
@@ -559,56 +563,18 @@ app.post("/api/clone", async (req, res) => {
         {code:"ZA",name:"South Africa"},{code:"MA",name:"Morocco"},{code:"TR",name:"Turkey"},
       ];
 
-      // Lista países já em markets INDIVIDUAIS (ignora Global/International)
-      const existingCountries = new Set();
-      try {
-        const mData = await gql(destination.shop, `
-          query {
-            markets(first: 100) {
-              edges {
-                node {
-                  name
-                  regions(first: 100) {
-                    edges { node { ... on MarketRegionCountry { code } } }
-                  }
-                }
-              }
-            }
-          }
-        `, {}, tokenDest);
-        for (const e of mData.markets.edges) {
-          const regionCount = e.node.regions.edges.length;
-          // Pula markets com muitos países (Global/International = catch-all)
-          if (regionCount > 10) {
-            log(`⏭️ Ignorando market "${e.node.name}" (${regionCount} países — catch-all)`);
-            continue;
-          }
-          for (const r of e.node.regions.edges) if (r.node.code) existingCountries.add(r.node.code);
-        }
-      } catch (err) { log(`❌ ${err.message}`, "error"); }
-
-      const novos = PAISES_MARKETS.filter(p => !EXCLUDED.has(p.code) && !existingCountries.has(p.code));
-      log(`🌍 ${existingCountries.size} países já cobertos | ${novos.length} a criar`);
-
-      let mkCriados = 0;
-      for (let i = 0; i < novos.length; i++) {
-        const p = novos[i];
-        progress("markets", i + 1, novos.length);
+      const marketCall=(q,v)=>gql(destination.shop,q,v,tokenDest);
+      const marketPlan=await prepare(marketCall,{mode:'markets',countries:PAISES_MARKETS.filter(p=>!EXCLUDED.has(p.code)).map(p=>p.code)});
+      let mkCriados=0;
+      for(const [i,row] of marketPlan.rows.entries()){
+        progress('markets',i+1,marketPlan.rows.length);
+        if(row.marketId){log(`⏭️ ${row.name}: já existe; use a aba Markets para corrigir moeda/idiomas.`);continue;}
         try {
-          const r = await gql(destination.shop, `mutation marketCreate($input:MarketCreateInput!){marketCreate(input:$input){market{id}userErrors{field message}}}`,
-            { input: { name: p.name, enabled: true, regions: [{ countryCode: p.code }] } }, tokenDest);
-          if (r.marketCreate.userErrors.length === 0) {
-            mkCriados++;
-            // Tenta ativar moeda local
-            try {
-              await gql(destination.shop, `mutation($id:ID!,$i:MarketCurrencySettingsUpdateInput!){marketCurrencySettingsUpdate(marketId:$id,input:$i){userErrors{message}}}`,
-                { id: r.marketCreate.market.id, i: { localCurrencies: true } }, tokenDest);
-            } catch (err) { log(`❌ ${err.message}`, "error"); }
-          }
-        } catch (err) { log(`❌ ${err.message}`, "error"); }
-        await sleep(100);
+          if(row.error)throw new Error(row.error);
+          log(`✅ ${row.name}: ${await ensureMarket(marketCall,row)}`);mkCriados++;
+        } catch(e){log(`❌ ${row.name}: ${e.message}`,'error');}
       }
-      log(`✅ Markets: ${mkCriados} criados | ${existingCountries.size} já existiam`, "success");
+      log(`Markets: ${mkCriados} criados com moeda explícita e subpasta.`);
     }
 
     // ==== FRETES POR PAÍS ====
@@ -1076,12 +1042,18 @@ app.post("/api/store-import", async (req, res) => {
   // Streaming NDJSON (uma linha JSON por evento — o cliente já lê assim)
   res.setHeader("Content-Type", "application/x-ndjson");
   res.setHeader("Cache-Control", "no-cache");
-  const emit = (obj) => res.write(JSON.stringify(obj) + "\n");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  let closed=false;
+  const emit = (obj) => { if(!closed) res.write(JSON.stringify(obj) + "\n"); };
+  const heartbeat=setInterval(()=>emit({type:"heartbeat"}),15000);
+  res.on('close',()=>{closed=true;clearInterval(heartbeat);});
   const log = (msg) => emit({ log: msg });
   const step = (pct, s) => emit({ pct, step: s });
 
   try {
-    const { url, destination, options, rules } = req.body || {};
+    const { url, destination, options = {}, rules = {} } = req.body || {};
+    if(options.products) rules.stock=stockQuantity(rules.stock);
     if (!url) { log("❌ URL vazia"); res.end(); return; }
     if (!destination?.shop) { log("❌ Destination store não informada"); res.end(); return; }
 
@@ -1104,7 +1076,7 @@ app.post("/api/store-import", async (req, res) => {
     let locationId = null;
     if (options.products){
       const locs = await restCall("GET", destination.shop, "/locations.json", token);
-      const list = locs.locations || [];
+      const list = (locs.locations || []).filter(l=>l.active!==false&&!l.legacy);
       const own = list.find(l => !/dsers|oberlo|printful|fulfillment-service|cjdropshipping/i.test(l.name || ""));
       const chosen = own || list[0];
       if (!chosen) throw new Error("Nenhum local de estoque encontrado na loja destino");
@@ -1195,29 +1167,33 @@ app.post("/api/store-import", async (req, res) => {
       if (rules.limit > 0) products = products.slice(0, rules.limit);
 
       // Mapa de duplicados (por título) na loja destino
-      const existingTitles = new Set();
-      if (rules.skipDuplicates){
+      const existingTitles = new Set(), existingProducts=[];
+      if (rules.skipDuplicates || rules.repairStock){
         log("🔍 Listando produtos já na loja destino...");
-        step(28, "Checando duplicados");
-        let cursor = "/products.json?limit=250&fields=id,title";
-        while (cursor){
-          const dd = await restCall("GET", destination.shop, cursor, token);
-          for (const p of (dd.products || [])) existingTitles.add(normTitle(p.title));
-          // paginação por link não é trivial via restCall — vamos pegar só a 1ª página do padrão
-          // (é o suficiente pra a maioria dos casos práticos)
-          cursor = null;
-        }
-        log(`   ${existingTitles.size} já existem (serão pulados)`);
+        existingProducts.push(...await restPaginated(destination.shop,"/products.json?limit=250&fields=id,title,handle,tags",token,"products"));
+        for(const p of existingProducts) existingTitles.add(normTitle(p.title));
+        log(`   ${existingTitles.size} títulos já existem`);
       }
 
       log(`\n🚀 Enviando ${products.length} produtos...`);
       let done = 0, ok = 0, skipped = 0, failed = 0;
 
       for (const src of products){
+        if(closed) break;
         done++;
         const pct = 30 + Math.floor((done / products.length) * 55);
         step(pct, `Produto ${done}/${products.length}`);
 
+        if(rules.repairStock && existingTitles.has(normTitle(src.title))){
+          const matches=existingProducts.filter(p=>normTitle(p.title)===normTitle(src.title)&&p.handle===src.handle&&String(p.tags||'').split(',').map(t=>t.trim()).includes(rules.tag||'store-import'));
+          if(matches.length!==1){failed++;log(`⚠️ [${done}] ${src.title}: correção ignorada; precisa de título, handle e tag de importação únicos.`);continue;}
+          try {
+            const data=await restCall("GET",destination.shop,`/products/${matches[0].id}.json`,token);
+            await setProductStock((q,v)=>gql(destination.shop,q,v,token),data.product.variants,locationId,rules.stock);
+            ok++;log(`✅ [${done}] ${src.title}: estoque atualizado para ${rules.stock} por variante (produto existente).`);
+          }catch(e){failed++;log(`❌ [${done}] ${src.title}: ${e.message}`);}
+          continue;
+        }
         if (rules.skipDuplicates && existingTitles.has(normTitle(src.title))){
           skipped++;
           log(`⏭️ [${done}] ${src.title} (já existe)`);
@@ -1249,6 +1225,7 @@ app.post("/api/store-import", async (req, res) => {
         const payload = {
           product: {
             title: src.title,
+            handle: src.handle,
             body_html: src.body_html || "",
             product_type: src.product_type || "",
             tags: tags.join(", "),
@@ -1265,24 +1242,14 @@ app.post("/api/store-import", async (req, res) => {
           if (!r.product) throw new Error("resposta sem product");
           handleToDestId[src.handle] = r.product.id;
 
-          // ajusta estoque via GraphQL (uma chamada por produto)
-          if (rules.stock > 0){
-            const gqlQ = `mutation($input: InventorySetQuantitiesInput!){
-              inventorySetQuantities(input:$input){ userErrors{ message } }
-            }`;
-            const quantities = r.product.variants.map(v => ({
-              inventoryItemId: `gid://shopify/InventoryItem/${v.inventory_item_id}`,
-              locationId: `gid://shopify/Location/${locationId}`,
-              quantity: rules.stock,
-            }));
-            const gqlUrl = `https://${destination.shop}/admin/api/${API_VERSION}/graphql.json`;
-            const gr = await fetch(gqlUrl, {
-              method: "POST",
-              headers: { "Content-Type":"application/json", "X-Shopify-Access-Token": token },
-              body: JSON.stringify({ query: gqlQ, variables: { input: { name:"available", reason:"correction", ignoreCompareQuantity:true, quantities } } }),
-            });
-            const gd = await gr.json().catch(()=>({}));
-            if (gd.errors) throw new Error("estoque: " + JSON.stringify(gd.errors).slice(0,120));
+          // Product exists even if inventory fails: keep it and offer a stock-only repair.
+          existingTitles.add(normTitle(src.title));
+          try {
+            await setProductStock((q,v)=>gql(destination.shop,q,v,token),r.product.variants,locationId,rules.stock);
+          } catch(e) {
+            failed++;
+            log(`⚠️ [${done}] ${src.title}: produto criado (ID ${r.product.id}), estoque pendente: ${e.message}. Use "Corrigir estoque dos já importados" para repetir sem duplicar.`);
+            continue;
           }
 
           ok++;
@@ -1333,10 +1300,12 @@ app.post("/api/store-import", async (req, res) => {
   } catch(err) {
     emit({type:"error",message:err.message});
   }
+  clearInterval(heartbeat);
   res.end();
 });
 
 app.listen(PORT, () => {
   console.log(`\n🔄 Shopify Store Cloner rodando na porta ${PORT}\n`);
 });
+
 
