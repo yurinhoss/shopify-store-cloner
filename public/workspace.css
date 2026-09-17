@@ -5,3 +5,33 @@ body{line-height:1.6;-webkit-font-smoothing:antialiased}button,input,select,text
 @media(min-width:1600px){.main{padding:42px 52px}}@media(max-width:1050px){.main{padding:24px}.stores-grid{grid-template-columns:1fr}.arrow-col{padding:0;transform:rotate(90deg)}.two-col,.three-col{grid-template-columns:1fr}}
 @media(max-width:760px){.sidebar{position:static;width:auto;border-right:0;border-bottom:1px solid var(--border)}.side-brand{padding:18px 20px}.nav-caption,.side-foot{display:none}.tabs-wrap{padding:0 12px 12px}.tabs{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;gap:6px}.tab-btn{width:auto;flex:none;white-space:nowrap;padding:10px 12px}.header{margin:0;position:static;height:76px;padding:14px 20px}.header-badge{display:none}.main{margin:0;padding:24px 16px}.page-intro h2{font-size:24px}.card-body,.store-card,.planner-card{padding:20px}.planner-countries{grid-template-columns:1fr}.planner-actions .btn-primary{width:100%}.field input{font-size:16px}.skip-link{left:10px}.ck-item{flex-wrap:wrap}.options-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+
+
+/* Operation feedback */
+.progress-bar-bg{height:10px;background:#e8eef8;border-radius:99px;overflow:hidden;margin:14px 0}
+.progress-bar-fill{position:relative;background:linear-gradient(100deg,#3675ed,#6380ef 55%,#30bdb7);border-radius:99px;transition:width .55s cubic-bezier(.22,1,.36,1)}
+.progress-label{color:#64748b;font-weight:500;gap:16px}
+.log-area .log-line{padding:5px 9px;margin:3px 0;border-radius:6px;line-height:1.65;background:transparent;word-break:break-word}
+.log-area .log-line.success{background:rgba(52,211,153,.08);color:#89e4bd;border-left:2px solid #37b88d}
+.log-area .log-line.error{background:rgba(251,113,133,.08);color:#ffadb8;border-left:2px solid #f17d90}
+.reset-progress{margin:22px 0 12px;padding:20px 22px;background:linear-gradient(120deg,#f5f8ff,#f1fafb);border:1px solid #dce7f5;border-radius:16px;box-shadow:0 4px 18px #21457806}
+.reset-progress[hidden]{display:none}
+.reset-progress-heading{display:flex;align-items:center;gap:10px;color:#263b5a;font-size:14px;font-weight:600}
+.reset-progress-percent{margin-left:auto;font-size:20px;font-variant-numeric:tabular-nums;color:#3767cf}
+.reset-progress-detail{font-size:12px;color:#64748b;line-height:1.6}
+.reset-progress-icon{width:18px;height:18px;flex-shrink:0;border:2px solid #ccdaf3;border-top-color:#4478e5;border-radius:50%}
+.reset-progress[data-state="running"] .reset-progress-icon,.reset-progress[data-state="waiting"] .reset-progress-icon{animation:operation-spin .85s linear infinite}
+.reset-progress[data-state="running"] .progress-bar-fill:after,.reset-progress[data-state="waiting"] .progress-bar-fill:after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent, #ffffff70,transparent);transform:translateX(-100%);animation:operation-shine 1.8s ease-in-out infinite}
+.reset-progress[data-state="waiting"] .progress-bar-fill{animation:operation-wait 1.8s ease-in-out infinite alternate}
+.reset-progress[data-state="done"] .progress-bar-fill{background:linear-gradient(90deg,#1caa83,#52c8a6)}
+.reset-progress[data-state="done"] .reset-progress-icon{border-color:#29ae89;background:#29ae89;box-shadow:inset 0 0 0 4px #f1fafb}
+.reset-progress[data-state="done"] .reset-progress-percent{color:#148664}
+.reset-progress[data-state="warning"] .progress-bar-fill{background:#d4a24b}
+.reset-progress[data-state="error"] .reset-progress-icon{border-color:#d16b7c}
+.reset-progress[data-state="error"] .progress-bar-fill{background:#d16b7c;width:100%!important}
+.reset-progress[data-state="error"] .reset-progress-percent{display:none}
+@keyframes operation-spin{to{transform:rotate(360deg)}}
+@keyframes operation-shine{to{transform:translateX(100%)}}
+@keyframes operation-wait{to{transform:translateX(180%)}}
+@media(max-width:600px){.reset-progress{padding:16px}.reset-progress-heading{font-size:13px}.reset-progress-percent{font-size:18px}}
+@media(prefers-reduced-motion:reduce){.reset-progress *{animation:none!important;transition:none!important}}
