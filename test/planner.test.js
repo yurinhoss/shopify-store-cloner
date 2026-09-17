@@ -88,9 +88,9 @@ test('HTTP preview/apply validates destination, rejects replay and reports mutat
  const fake=async(shop,token,q)=>{
   if(q.includes('PlannerCurrencies'))return currencies; if(q.includes('PlannerMarketPresence'))return {market:{webPresences:connection([])}}; if(q.includes('PlannerShop'))return {shop:{name:'Test',currencyCode:'EUR'}};
   if(q.includes('PlannerLocales'))return {shopLocales:locales('en','pt-PT')};
-  if(q.includes('PlannerMarkets'))return {markets:connection([{id:'market',regions:connection([{code:'PT'}])}])};
+  if(q.includes('PlannerMarkets'))return {markets:connection([])};
   if(q.includes('PlannerMarketPresence'))return {market:{webPresences:connection([])}};if(q.includes('PlannerPresences'))return {webPresences:connection([{id:'web',subfolderSuffix:'pt',defaultLocale:{locale:'pt-PT'},alternateLocales:[{locale:'en'}]}])};
-  if(q.includes('PlannerUpdate')){writes++;return {marketUpdate:{userErrors:[{message:'Test mutation rejected'}]}};}
+  if(q.includes('PlannerCreate')){writes++;return {marketCreate:{userErrors:[{message:'Test mutation rejected'}]}};}
   throw new Error(q);
  };
  registerPlanner(app,async()=> 'test-token',fake);

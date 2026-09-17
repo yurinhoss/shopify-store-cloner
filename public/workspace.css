@@ -35,3 +35,23 @@ body{line-height:1.6;-webkit-font-smoothing:antialiased}button,input,select,text
 @keyframes operation-wait{to{transform:translateX(180%)}}
 @media(max-width:600px){.reset-progress{padding:16px}.reset-progress-heading{font-size:13px}.reset-progress-percent{font-size:18px}}
 @media(prefers-reduced-motion:reduce){.reset-progress *{animation:none!important;transition:none!important}}
+
+/* Planner sections: selection, configuration, review and results. */
+.planner-card{padding:0;overflow:hidden;border-radius:20px}
+.planner-heading{padding:28px 30px 20px}.planner-heading p{margin:8px 0 0}
+.planner-destination{margin:0 30px 26px;padding:14px 18px;border:1px solid #dfe8f4;border-radius:12px;background:#f8faff}
+.planner-destination p{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:0}.planner-destination .planner-link{margin-left:auto}.planner-destination strong{font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.planner-section{padding:28px 30px;border-top:1px solid #e5ebf3}
+.planner-section-title{display:flex;gap:13px;align-items:flex-start;margin-bottom:22px}.planner-section-title>span{display:grid;place-items:center;flex-shrink:0;width:34px;height:34px;background:#edf3ff;border:1px solid #dbe6fc;color:#4770bc;border-radius:10px;font-size:12px;font-weight:600}
+.planner-section h3,.planner-results h3{font-size:15px;font-weight:600;margin:0 0 5px}.planner-section-title p{margin:0;font-size:12px}
+.planner-search{display:flex;flex-direction:column;gap:8px;font-size:12px;color:#64748b}.planner-card .planner-search input[type=search]{margin:0;width:100%;padding:12px 14px;background:#fff}
+.planner-regions{margin:0 0 20px;gap:8px}.planner-regions button:hover{background:#edf3ff;border-color:#adc7f5}
+.planner-countries{margin-top:16px;padding:12px;gap:5px 12px;max-height:275px;scrollbar-gutter:stable}.planner-countries label{padding:8px;border-radius:7px;min-width:0}.planner-countries label:has(input:checked){background:#edf3ff;color:#315a9e}.planner-countries input{accent-color:#4175e5}
+.planner-card [id$="-count"]{margin:14px 0;font-weight:600;color:#4669a4}
+.planner-exclusions,.planner-languages{padding:14px 16px;border:1px solid #e2e8f0;border-radius:10px;margin:18px 0 0;background:#fafbfd}.planner-card summary{line-height:1.6;color:#536780}.planner-exclusions p{margin:12px 0 0}
+.planner-settings>p{margin:12px 0;max-width:820px}.planner-settings{background:#fcfdff}
+#planner-locales{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.planner-language-chip{font-size:11px;padding:6px 10px;border:1px solid #dfe7f1;border-radius:6px;background:#fff;color:#51647c}
+.planner-actions{margin:0 0 20px;gap:12px}.planner-actions button{min-height:46px;font-size:13px}.planner-actions button:disabled{background:#eef2f7;color:#8c99ae;opacity:1}.planner-status:not(:empty){padding:14px 16px;margin:0 0 20px;background:#f2f6fc;border:1px solid #e1e9f5;border-radius:10px;line-height:1.7}
+.planner-table:not(:empty){border:1px solid #e2e8f0;border-radius:12px;max-height:560px;overflow:auto;scrollbar-gutter:stable}.planner-table table{min-width:740px}.planner-table th{position:sticky;top:0;z-index:1;box-shadow:0 1px #e2e8f0;padding:15px 18px}.planner-table td{padding:20px 18px;line-height:1.65}.planner-table tr:hover td{background:#fafcff}.planner-table small{color:#718198;font-size:11px;margin-top:8px;line-height:1.6}.planner-table select{width:100%;min-width:180px}.planner-table td:first-child{font-weight:600;width:18%}.planner-table td:nth-child(2){width:19%}.planner-table td:nth-child(3){width:33%}
+.planner-results{padding:28px 30px;border-top:1px solid #e5ebf3;background:#f8faff}.planner-results[hidden]{display:none}.planner-results>p{margin:0 0 16px}.planner-results .planner-log{max-height:360px;overflow:auto;margin:0;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;white-space:pre-wrap}.planner-results .log-line{padding:9px 12px;margin:5px 0}
+@media(max-width:700px){.planner-heading,.planner-section,.planner-results{padding:22px 18px}.planner-destination{margin:0 18px 20px}.planner-destination .planner-link{margin-left:0}.planner-countries{grid-template-columns:1fr;max-height:250px}.planner-actions button{width:100%}.planner-table:not(:empty){max-height:440px}}

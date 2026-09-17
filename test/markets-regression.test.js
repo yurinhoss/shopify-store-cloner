@@ -37,13 +37,12 @@ test('a web presence shared with another market is not rewritten',async()=>{
 test('a successful mutation with the wrong effective currency is reported as failure',async()=>{
  const mock=api([web()],{returnCurrency:'USD'});await assert.rejects(ensureMarket(mock.call,row),/não confirmou/);
 });
-test('preview resolves duplicate markets explicitly and shows the country URLs',async()=>{
+test('preview skips existing markets including duplicates without asking for a selection',async()=>{
  const call=async q=>{
   if(q.includes('PlannerShop'))return {shop:{name:'Store',currencyCode:'USD'}};
   if(q.includes('PlannerLocales'))return {shopLocales:[{locale:'en',published:true},{locale:'de',published:true}]};
   if(q.includes('PlannerCurrencies'))return {__type:{enumValues:[{name:'EUR'},{name:'USD'}]}};
   return {markets:con(['m1','m2'].map(id=>({id,name:id,regions:con([{code:'DE'}])})))};
  };
- const blocked=await prepare(call,{mode:'markets',countries:['DE']});assert.match(blocked.rows[0].error,/duplicados/);
- const ready=await prepare(call,{mode:'markets',countries:['DE'],marketIds:{DE:'m2'}});assert.ok(!ready.rows[0].error);assert.equal(ready.rows[0].marketId,'m2');assert.equal(ready.rows[0].currency,'EUR');assert.deepEqual(ready.rows[0].paths,['/de-de','/en-de']);
+ const blocked=await prepare(call,{mode:'markets',countries:['DE']});assert.ok(blocked.rows[0].skipReason);assert.ok(!blocked.rows[0].error);assert.equal(blocked.rows[0].marketId,'m1');
 });
