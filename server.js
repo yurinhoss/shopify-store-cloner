@@ -4,6 +4,7 @@
 // ============================================================
 
 import express from "express";
+import {registerPolicies} from "./lib/policies.js";
 import {setProductStock, stockQuantity} from "./lib/inventory.js";
 import {registerReset} from "./lib/reset.js";
 import { paginateShopify } from "./lib/pagination.js";
@@ -21,6 +22,7 @@ const API_VERSION = "2026-07";
 
 app.use(express.json({ limit: "1mb" }));
 registerPlanner(app, getToken);
+registerPolicies(app, getToken);
 registerReset(app, {getToken, gql, restCall, restPaginated, sleep});
 app.use(express.static(join(__dirname, "public")));
 app.get("/api/health",(_req,res)=>res.json({ok:true,release:"markets-inventory-2026-09-16",revision:process.env.RAILWAY_GIT_COMMIT_SHA||null}));

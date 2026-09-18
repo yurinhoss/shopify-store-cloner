@@ -39,3 +39,12 @@ API references:
 - A prévia mostra moeda explícita e caminhos por idioma. Quando não há moeda mapeada/suportada, escolha uma moeda da lista da API. Idiomas seguem os publicados na loja; configurar idiomas não traduz conteúdo.
 
 Contratos: https://shopify.dev/docs/api/admin-graphql/latest/input-objects/InventoryQuantityInput e https://shopify.dev/docs/api/admin-graphql/latest/input-objects/MarketUpdateInput .
+
+
+## Gerador de políticas
+
+A aba Políticas gera sete textos para produtos físicos e compras avulsas: frete, devoluções, privacidade, termos de serviço, termos de venda, contato e aviso legal. Europa/mundo usam inglês; Japão usa japonês. Dados principais da empresa e prazo de devolução são informados uma vez. Ajustes opcionais mostram as sugestões operacionais; devem corresponder à operação real. Não é uma garantia de conformidade jurídica global, nem configuração de consentimento de cookies ou tradução automática por Markets.
+
+A prévia lê as políticas existentes e é válida por 30 minutos. A publicação exige confirmação do destino e substitui apenas os tipos selecionados. Uma leitura nova impede sobrescrever mudanças feitas depois da prévia. Falhas parciais são mostradas por política; uma nova tentativa exige outra prévia. Permissões: read_legal_policies e write_legal_policies. Nenhuma credencial é guardada no rascunho.
+
+Referências: https://shopify.dev/docs/api/admin-graphql/latest/mutations/shopPolicyUpdate ; https://shopify.dev/docs/api/admin-graphql/latest/enums/ShopPolicyType ; https://europa.eu/youreurope/citizens/consumers/shopping/returns/index_en.htm ; https://europa.eu/youreurope/citizens/consumers/shopping/guarantees/index_en.htm ; https://www.no-trouble.caa.go.jp/what/mailorder/ ; https://www.ppc.go.jp/en/legal/ .
