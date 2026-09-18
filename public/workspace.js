@@ -1,5 +1,6 @@
 (() => {
   const pages = {
+    connect:['Conectar loja','Conecte uma vez. Use sempre.','Salve suas conexões Shopify na sua conta.','M12 4v16M4 12h16'],
     stores:['Minhas lojas','Conexões prontas para usar.','Cadastre suas lojas uma vez e reutilize em todas as ferramentas.','M3 9l2-6h14l2 6M4 9v12h16V9M9 21v-8h6v8'],
     builder:['Criador V2','Sua próxima loja, passo a passo.','Defina a marca, aprove imagens e organize o catálogo em uma nova vitrine.','M12 3v18M3 12h18M5 5l14 14M19 5L5 19'],
     clone:['Clonar loja','Prepare sua próxima loja.','Conecte origem e destino, escolha o conteúdo e acompanhe cada etapa da clonagem.','M8 3H3v13h5M8 8h13v13H8z'],
@@ -24,6 +25,6 @@
     for(const b of nav.querySelectorAll('button'))b.setAttribute('aria-current',b.dataset.tab===e.detail?'page':'false');
   });
   for(const prefix of ['orig','dest'])for(const suffix of ['shop','id','secret'])document.getElementById(`${prefix}-${suffix}`).addEventListener('input',()=>{const key=prefix==='orig'?'origin':'dest';document.getElementById(`dot-${key}`).className='status-dot';document.getElementById(`info-${key}`).textContent='Credenciais alteradas. Teste a conexão novamente.';});
-  switchTab('clone');
+  switchTab('stores');
 })();
 

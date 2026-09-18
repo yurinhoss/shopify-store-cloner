@@ -4,6 +4,7 @@
 // ============================================================
 
 import express from "express";
+import {registerAccounts} from "./lib/accounts.js";
 import {registerBuilder} from "./lib/builder.js";
 import {registerPolicies} from "./lib/policies.js";
 import {setProductStock, stockQuantity} from "./lib/inventory.js";
@@ -22,8 +23,10 @@ const app = express();
 const API_VERSION = "2026-07";
 
 app.use("/api/builder", express.json({ limit: "32mb" }));
-registerBuilder(app, getToken);
 app.use(express.json({ limit: "1mb" }));
+app.set("trust proxy", 1);
+registerAccounts(app,{directory:process.env.DATA_DIR||(process.env.NODE_ENV==="production"?null:join(__dirname,"data")),verify:getToken,production:process.env.NODE_ENV==="production",publicDir:join(__dirname,"public")});
+registerBuilder(app, getToken);
 registerPlanner(app, getToken);
 registerPolicies(app, getToken);
 registerReset(app, {getToken, gql, restCall, restPaginated, sleep});

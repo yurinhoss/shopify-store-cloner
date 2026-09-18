@@ -5,3 +5,8 @@ clone-app-server.js
 .env
 .DS_Store
 node_modules/
+
+
+data/
+*.sqlite*
+credentials.key

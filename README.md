@@ -1,8 +1,8 @@
 # Shopify Store Cloner
 
-Node.js 20+, zero runtime dependencies beyond Express — the built-in `fetch` is used directly. The Admin API version is set once in `server.js` (`API_VERSION`); review it every quarter, since Shopify supports each version for about 12 months and silently serves a newer one after that.
+Node.js 24.x, zero runtime dependencies beyond Express — the built-in `fetch` is used directly. The Admin API version is set once in `server.js` (`API_VERSION`); review it every quarter, since Shopify supports each version for about 12 months and silently serves a newer one after that.
 
-Node.js 20+. Start with `npm start`; run the local tests with `node --test`.
+Node.js 24.x. Start with `npm start`; run the local tests with `node --test`.
 
 ## Markets and shipping planner
 
@@ -51,9 +51,13 @@ Referências: https://shopify.dev/docs/api/admin-graphql/latest/mutations/shopPo
 
 ## Minhas lojas e Criador V2
 
-Minhas lojas guarda conexões neste navegador com AES-GCM (chave derivada por PBKDF2/SHA-256, 600.000 iterações, salt aleatório e IV novo por gravação). A senha não é salva. Ao reabrir a página, desbloqueie uma vez e os seletores de origem/destino preenchem as conexões usadas por todas as abas. É possível testar/cadastrar, editar, excluir, exportar e importar o cadastro criptografado. Não há sincronização entre dispositivos ou recuperação da senha; exporte antes de limpar o navegador. Os segredos são enviados por HTTPS ao backend somente para executar as operações. A aplicação continua sem autenticação multiusuário: nunca acrescente um endpoint público de credenciais ou uma chave de IA compartilhada no servidor.
+A entrada usa **Criar conta / Entrar** com e-mail e senha (mínimo 10 caracteres). Senhas usam scrypt com salt individual; sessões de 30 dias usam cookie HttpOnly/Secure em produção, token aleatório armazenado por hash, CSRF e limite de tentativas de autenticação. Cada conta só acessa suas conexões e preferências. Não há envio de confirmação ou recuperação por e-mail nesta versão.
 
-O Criador V2 mantém as funções anteriores. Permite segmento, marca, domínio de referência, idioma da vitrine (EN/PT/DE/JA), paletas editáveis, direção visual, catálogo completo paginado e sugestões por título/tipo/tags. Projetos e imagens são guardados por domínio Shopify no IndexedDB, separados do cadastro de credenciais. Estes projetos não são criptografados e não contêm credenciais; contêm metadados comerciais do catálogo. A análise do servidor dura quatro horas e é perdida em reinícios; reanalisar mantém as imagens locais. Cada imagem pode ser enviada pelo usuário ou gerada pela API OpenAI com sua própria chave cadastrada no cofre, modelo `gpt-image-2`, uma imagem por solicitação. Refinamentos usam a imagem selecionada como referência. Não há cobrança de IA sem clicar em gerar; upload e classificação do catálogo não usam IA paga.
+**Conectar loja** testa e salva as credenciais Shopify; **Minhas lojas** permite selecionar origem/destino, editar e excluir conexões. Segredos e a chave OpenAI são criptografados com AES-256-GCM no servidor e nunca retornam ao navegador. As ferramentas recebem referências às conexões; o backend resolve essas referências dentro da conta autenticada. O cadastro antigo deste navegador pode ser importado com sua senha anterior.
+
+Produção exige `DATA_DIR` em volume persistente (Railway: `/data`) e `NODE_ENV=production`. SQLite e `credentials.key` ficam nesse diretório, fora do Git. Faça backup do diretório inteiro, incluindo a chave; nunca apague ou substitua a chave separadamente. Mantenha uma única réplica com esse volume. Desenvolvimento usa `./data`. A API pública é limitada a autenticação, health e pacotes temporários de tema necessários para a Shopify.
+
+O Criador V2 mantém as funções anteriores. Permite segmento, marca, domínio de referência, idioma da vitrine (EN/PT/DE/JA), paletas editáveis, direção visual, catálogo completo paginado e sugestões por título/tipo/tags. Projetos e imagens são guardados por conta e domínio Shopify no IndexedDB, separados do cadastro de credenciais. Estes projetos não são criptografados e não contêm credenciais; contêm metadados comerciais do catálogo. A análise do servidor dura quatro horas e é perdida em reinícios; reanalisar mantém as imagens locais. Cada imagem pode ser enviada pelo usuário ou gerada pela API OpenAI com sua própria chave cadastrada na conta, modelo `gpt-image-2`, uma imagem por solicitação. Cada botão solicita somente sua peça (logo, favicon, banner desktop ou mobile), explicitamente sem layouts de página. Referências são opcionais, desativadas por padrão, e restritas à imagem selecionada do mesmo cartão. Não há cobrança de IA sem clicar em gerar; upload e classificação do catálogo não usam IA paga.
 
 Coleções novas recebem handles `v2-*`; as existentes são preservadas. A seleção é explícita e os produtos em rascunho não são ativados. A publicação da coleção usa o canal Online Store / Loja virtual. O estoque é preservado por padrão; a ação opcional exige quantidade/local e confirmação, reutilizando leitura CAS e idempotência do módulo inventory. Criar coleções e ajustar estoque afeta a loja inteira, antes da publicação do tema.
 
