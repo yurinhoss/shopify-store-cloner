@@ -4,6 +4,7 @@
 // ============================================================
 
 import express from "express";
+import {registerBuilder} from "./lib/builder.js";
 import {registerPolicies} from "./lib/policies.js";
 import {setProductStock, stockQuantity} from "./lib/inventory.js";
 import {registerReset} from "./lib/reset.js";
@@ -20,6 +21,8 @@ const app = express();
 // A Shopify suporta cada versão por ~12 meses; revise a cada trimestre em shopify.dev.
 const API_VERSION = "2026-07";
 
+app.use("/api/builder", express.json({ limit: "32mb" }));
+registerBuilder(app, getToken);
 app.use(express.json({ limit: "1mb" }));
 registerPlanner(app, getToken);
 registerPolicies(app, getToken);
