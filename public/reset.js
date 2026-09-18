@@ -1,5 +1,5 @@
 (() => {
-  const steps={markets:'Markets',fretes:'Fretes',colecoes:'Coleções',paginas:'Páginas',menus:'Menus',descontos:'Descontos',arquivos:'Arquivos',produtos:'Todos os produtos'};
+  const steps={markets:'Markets',fretes:'Fretes — todas as zonas e tarifas do perfil geral',colecoes:'Coleções',paginas:'Páginas',menus:'Menus',descontos:'Descontos',arquivos:'Arquivos',produtos:'Todos os produtos'};
   const $=id=>document.getElementById(id);
   let running=false;
   const panel=document.createElement('div');

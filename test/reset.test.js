@@ -47,10 +47,10 @@ test('menus preserve defaults',async()=>{
   d.gql=async(shop,query,vars)=>query.includes('menuDelete')?(deleted.push(vars.id),{menuDelete:{deletedMenuId:vars.id,userErrors:[]}}):{menus:{nodes:[{id:'main',isDefault:true},{id:'custom',isDefault:false}],pageInfo:{hasNextPage:false}}};
   await runReset(body({menus:true}),()=>{},d);assert.deepEqual(deleted,['custom']);
 });
-test('shipping preserves custom zones and only deletes two-letter zones',async()=>{
+test('shipping deletes full country names and custom zones in the general profile',async()=>{
   const d=deps(),deleted=[];
   d.gql=async(shop,query,vars)=>query.includes('deliveryProfileUpdate')?(deleted.push(...vars.profile.zonesToDelete),{deliveryProfileUpdate:{profile:{id:'p'},userErrors:[]}}):{deliveryProfiles:{edges:[{node:{id:'p',default:true,profileLocationGroups:[{locationGroupZones:{pageInfo:{hasNextPage:false},edges:[{node:{zone:{id:'de',name:'DE'}}},{node:{zone:{id:'custom',name:'Brasil Grátis'}}}]}}]}}]}};
-  await runReset(body({fretes:true}),()=>{},d);assert.deepEqual(deleted,['de']);
+  await runReset(body({fretes:true}),()=>{},d);assert.deepEqual(deleted,['de','custom']);
 });
 test('HTTP reset validates before auth and returns an SSE completion',async()=>{
   const app=express(),d=deps();let auth=0;d.getToken=async()=>{auth++;return 'test';};app.use(express.json());registerReset(app,d);
@@ -59,4 +59,21 @@ test('HTTP reset validates before auth and returns an SSE completion',async()=>{
     const bad=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body({produtos:true}),confirmShop:''})});assert.equal(bad.status,400);assert.equal(auth,0);
     const good=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body({produtos:true}))});assert.equal(good.status,200);assert.match(good.headers.get('content-type'),/event-stream/);assert.match(await good.text(),/"type":"done"/);assert.equal(auth,1);
   }finally{await new Promise(r=>server.close(r));}
+});
+
+
+test('shipping deletes 59 zones across location groups in bounded batches and preserves other profiles',async()=>{
+ const d=deps(),batches=[],events=[];
+ const zones=Array.from({length:59},(_,i)=>({node:{zone:{id:'z'+i,name:i===0?'Alemanha':'País '+i}}}));
+ d.gql=async(shop,q,v)=>{
+  if(q.includes('deliveryProfileUpdate')){assert.equal(v.id,'general');batches.push(v.profile.zonesToDelete);return {deliveryProfileUpdate:{profile:{id:'general'},userErrors:[]}};}
+  return {deliveryProfiles:{edges:[{node:{id:'custom-profile',default:false,profileLocationGroups:[{locationGroupZones:{pageInfo:{hasNextPage:false},edges:[{node:{zone:{id:'keep',name:'Keep'}}}]}}]}},{node:{id:'general',default:true,profileLocationGroups:[zones.slice(0,30),zones.slice(30)].map(edges=>({locationGroupZones:{edges,pageInfo:{hasNextPage:false}}}))}}]}};
+ };
+ await runReset(body({fretes:true}),(type,data)=>events.push({type,...data}),d);
+ assert.deepEqual(batches.map(b=>b.length),[20,20,19]);assert.equal(new Set(batches.flat()).size,59);assert.ok(!batches.flat().includes('keep'));assert.equal(events.at(-1).hasErrors,false);
+});
+test('shipping incomplete mutation response is reported as failure',async()=>{
+ const d=deps(),events=[];
+ d.gql=async(shop,q)=>q.includes('deliveryProfileUpdate')?{}:{deliveryProfiles:{edges:[{node:{id:'p',default:true,profileLocationGroups:[{locationGroupZones:{pageInfo:{hasNextPage:false},edges:[{node:{zone:{id:'z',name:'Alemanha'}}}]}}]}}]}};
+ await runReset(body({fretes:true}),(type,data)=>events.push({type,...data}),d);assert.equal(events.at(-1).hasErrors,true);
 });
