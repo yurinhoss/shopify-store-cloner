@@ -4,6 +4,7 @@
 // ============================================================
 
 import express from "express";
+import {cloneFiles} from "./lib/files.js";
 import {registerAccounts} from "./lib/accounts.js";
 import {registerBuilder} from "./lib/builder.js";
 import {registerPolicies} from "./lib/policies.js";
@@ -169,7 +170,7 @@ app.post("/api/auth", async (req, res) => {
 //  API: CLONE (SSE — Server-Sent Events)
 // ============================================================
 app.post("/api/clone", async (req, res) => {
-  const { origin, destination, options, customize } = req.body || {};
+  const { origin, destination, options, customize = {} } = req.body || {};
   try {
     credentials(origin); credentials(destination);
     if(origin.shop.toLowerCase()===destination.shop.toLowerCase())throw new Error('Origem e destino precisam ser lojas diferentes.');
@@ -196,9 +197,13 @@ app.post("/api/clone", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("X-Accel-Buffering", "no");
 
+  let closed=false;
   const send = (type, data) => {
-    res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+    if(!closed&&!res.writableEnded)res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
   };
+  res.flushHeaders();
+  const heartbeat=setInterval(()=>send('heartbeat',{}),15000);
+  res.on('close',()=>{closed=true;clearInterval(heartbeat);});
 
   const log = (msg, status = "info") => send("log", { msg, status });
   const progress = (step, current, total) => send("progress", { step, current, total });
@@ -437,63 +442,13 @@ app.post("/api/clone", async (req, res) => {
     // ==== ARQUIVOS (banners, ícones) ====
     if (options.files) {
       log("━━━━━━━━━━ ETAPA 7: ARQUIVOS (banners, ícones) ━━━━━━━━━━");
-      const arquivos = [];
-      let cursor = null;
-      while (true) {
-        const after = cursor ? `, after: "${cursor}"` : "";
-        const q = `query { files(first: 50${after}) { edges { cursor node { ... on MediaImage { id alt image { url originalSrc } fileStatus } ... on GenericFile { id url alt fileStatus } } } pageInfo { hasNextPage endCursor } } }`;
-        const data = await gql(origin.shop, q, {}, tokenOrig);
-        for (const e of data.files.edges) {
-          const n = e.node;
-          const url = n?.image?.originalSrc || n?.image?.url || n?.url;
-          if (url && n.fileStatus === "READY") {
-            const filename = url.split("/").pop().split("?")[0];
-            arquivos.push({ url, alt: n.alt || "", filename });
-          }
-        }
-        if (!data.files.pageInfo.hasNextPage) break;
-        cursor = data.files.pageInfo.endCursor;
-      }
-      log(`📁 ${arquivos.length} arquivos encontrados`);
-
-      // Mapa URL origem → URL destino (para substituir no tema depois)
-      const urlMap = {};
-      let uploaded = 0;
-      for (let i = 0; i < arquivos.length; i++) {
-        const arq = arquivos[i];
-        progress("files", i + 1, arquivos.length);
-        try {
-          // Baixa como base64 pra garantir o upload mesmo de CDN protegido
-          const b64 = await downloadBase64(arq.url);
-          if (b64) {
-            const ext = arq.filename.split(".").pop().toLowerCase();
-            const mime = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : ext === "svg" ? "image/svg+xml" : "image/jpeg";
-            const r = await gql(destination.shop,
-              `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{...on MediaImage{image{url}}}userErrors{message}}}`,
-              { files: [{ originalSource: `data:${mime};base64,${b64}`, contentType: "IMAGE", filename: arq.filename }] },
-              tokenDest);
-            const novaUrl = r.fileCreate?.files?.[0]?.image?.url;
-            if (novaUrl) urlMap[arq.url] = novaUrl;
-            uploaded++;
-          } else {
-            // Fallback: passa URL diretamente
-            await gql(destination.shop, `mutation fileCreate($files:[FileCreateInput!]!){fileCreate(files:$files){files{id}userErrors{message}}}`,
-              { files: [{ originalSource: arq.url, alt: arq.alt, contentType: "IMAGE" }] }, tokenDest);
-            uploaded++;
-          }
-        } catch {}
-        await sleep(200);
-      }
-      log(`✅ Arquivos: ${uploaded} enviados | ${Object.keys(urlMap).length} URLs mapeadas`, "success");
-      await sleep(3000); // aguarda Shopify processar
-
-      // Guarda urlMap no contexto para usar no tema
-      if (Object.keys(urlMap).length > 0) {
-        log(`🔄 URLs de CDN mapeadas para substituição no tema`);
-        // Armazena no objeto customize para reutilizar no tema
-        customize._urlMap = urlMap;
-        customize._originShopCDN = origin.shop.replace(".myshopify.com", "");
-      }
+      const result = await cloneFiles({
+        source:(q,v)=>gql(origin.shop,q,v,tokenOrig),
+        target:(q,v)=>gql(destination.shop,q,v,tokenDest),
+        log,progress,check:()=>{if(closed)throw Error('Conexão encerrada. Reinicie Arquivos para continuar sem duplicar.');}
+      });
+      customize._urlMap=result.urlMap;
+      if(result.failed||result.pending)throw Error(`Arquivos: ${result.failed} falhas e ${result.pending} ainda processando. Execute novamente somente Arquivos; os existentes serão pulados.`);
     }
 
     // ==== TEMA ====
@@ -893,6 +848,7 @@ app.post("/api/clone", async (req, res) => {
   } catch (err) {
     send("error", { msg: `💥 Erro fatal: ${err.message}` });
   }
+  clearInterval(heartbeat);
   res.end();
 });
 
