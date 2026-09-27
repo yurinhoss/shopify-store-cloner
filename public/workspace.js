@@ -1,8 +1,5 @@
 (() => {
   const pages = {
-    connect:['Conectar loja','Conecte uma vez. Use sempre.','Salve suas conexões Shopify na sua conta.','M12 4v16M4 12h16'],
-    stores:['Minhas lojas','Conexões prontas para usar.','Cadastre suas lojas uma vez e reutilize em todas as ferramentas.','M3 9l2-6h14l2 6M4 9v12h16V9M9 21v-8h6v8'],
-    builder:['Criador V2','Sua próxima loja, passo a passo.','Defina a marca, aprove imagens e organize o catálogo em uma nova vitrine.','M12 3v18M3 12h18M5 5l14 14M19 5L5 19'],
     clone:['Clonar loja','Prepare sua próxima loja.','Conecte origem e destino, escolha o conteúdo e acompanhe cada etapa da clonagem.','M8 3H3v13h5M8 8h13v13H8z'],
     storeimport:['Importar por URL','Traga seu catálogo para cá.','Importe produtos e conteúdo de uma URL pública para a loja de destino conectada.','M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5'],
     markets:['Markets','Sua loja em novos mercados.','Selecione os países e revise moedas e idiomas disponíveis nesta loja antes de aplicar.','M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M3 12h18M12 3c-5 5-5 13 0 18 5-5 5-13 0-18'],
@@ -25,6 +22,11 @@
     for(const b of nav.querySelectorAll('button'))b.setAttribute('aria-current',b.dataset.tab===e.detail?'page':'false');
   });
   for(const prefix of ['orig','dest'])for(const suffix of ['shop','id','secret'])document.getElementById(`${prefix}-${suffix}`).addEventListener('input',()=>{const key=prefix==='orig'?'origin':'dest';document.getElementById(`dot-${key}`).className='status-dot';document.getElementById(`info-${key}`).textContent='Credenciais alteradas. Teste a conexão novamente.';});
-  switchTab('stores');
+  switchTab('clone');
 })();
 
+
+Account.ready.then(()=>{
+  const button=document.createElement('button');button.type='button';button.className='planner-link';button.textContent='Sair';button.onclick=()=>Account.logout();
+  document.querySelector('header.header').append(button);
+});
