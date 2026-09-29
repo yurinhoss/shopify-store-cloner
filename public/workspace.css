@@ -68,3 +68,5 @@ body{line-height:1.6;-webkit-font-smoothing:antialiased}button,input,select,text
 .account-toolbar{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:24px}.account-toolbar p{color:#71809a;margin:6px 0}.store-empty{padding:36px;border:1px dashed #cdd7ec;border-radius:14px;color:#6b7892;grid-column:1/-1}#tab-connect .policy-grid{gap:24px;margin:28px 0}#tab-stores .store-grid{margin:24px 0}#tab-stores .store-card{padding:26px}#tab-stores .store-card button{margin:6px 6px 0 0}@media(max-width:640px){.account-toolbar{align-items:flex-start;flex-direction:column}}
 
 .builder-refine{display:flex!important;align-items:center;gap:8px;font-size:12px;margin:16px 0}.builder-refine input{width:auto!important;margin:0!important}
+
+.brand-mark{background:transparent;overflow:visible}.brand-mark img{width:100%;height:100%;object-fit:contain;display:block}
