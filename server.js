@@ -4,6 +4,7 @@
 // ============================================================
 
 import express from "express";
+import {ImportSessions, ImportBatch, runImportItems} from "./lib/import-session.js";
 import {cloneFiles} from "./lib/files.js";
 import {registerAccounts} from "./lib/accounts.js";
 import {registerBuilder} from "./lib/builder.js";
@@ -78,7 +79,7 @@ async function restCall(method, shop, path, token, body = null) {
 async function downloadBase64(url) {
   if (!url) return null;
   try {
-    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, signal:AbortSignal.timeout(45000) });
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
     if (buf.byteLength < 500) return null; // muito pequeno = placeholder
@@ -1002,7 +1003,13 @@ function resolveImageUrl(src, base){
   return null;
 }
 
+const importSessions = new ImportSessions();
 app.post("/api/store-import", async (req, res) => {
+  let job;
+  try { job=importSessions.acquire(req.body._accountId,req.body); }
+  catch(e) { return res.status(e.status||400).json({error:e.message}); }
+  const batch=new ImportBatch();
+  const pause=()=>{if(batch.exhausted())throw new Error("IMPORT_CONTINUE");};
   // Streaming NDJSON (uma linha JSON por evento — o cliente já lê assim)
   res.setHeader("Content-Type", "application/x-ndjson");
   res.setHeader("Cache-Control", "no-cache");
@@ -1013,13 +1020,15 @@ app.post("/api/store-import", async (req, res) => {
   const heartbeat=setInterval(()=>emit({type:"heartbeat"}),15000);
   res.on('close',()=>{closed=true;clearInterval(heartbeat);});
   const log = (msg) => emit({ log: msg });
-  const step = (pct, s) => emit({ pct, step: s });
+  const step = (pct, s) => {job.progress=Math.max(job.progress||0,pct);emit({pct:job.progress,step:s});};
+  emit({type:"checkpoint",importId:job.id});
+  if(job.finished){emit({type:"done",totals:job.productTotals});clearInterval(heartbeat);importSessions.release(job);return res.end();}
 
   try {
-    const { url, destination, options = {}, rules = {} } = req.body || {};
+    const { url, destination, options = {}, rules = {} } = job.body;
     if(options.products) rules.stock=stockQuantity(rules.stock);
-    if (!url) { log("❌ URL vazia"); res.end(); return; }
-    if (!destination?.shop) { log("❌ Destination store não informada"); res.end(); return; }
+    if (!url) throw new Error("URL vazia");
+    if (!destination?.shop) throw new Error("Loja de destino não informada");
 
     const base = baseUrl(url);
     log(`🌐 Origem: ${base}`);
@@ -1051,20 +1060,22 @@ app.post("/api/store-import", async (req, res) => {
     // ==============================
     // 1) BANNERS
     // ==============================
-    if (options.banners){
+    if (options.banners && !job.completed.banners){
       log("\n🖼️ Extraindo banners da home...");
       step(8, "Baixando home");
       try {
         const homeRes = await safeGet(base);
         if (!homeRes.ok) throw new Error("HTTP " + homeRes.status);
         const html = await homeRes.text();
-        const urls = extractBannerImages(html)
+        const urls = job.cache.banners || (job.cache.banners = extractBannerImages(html)
           .map(u => resolveImageUrl(u, base))
-          .filter(Boolean);
+          .filter(Boolean));
         log(`   ${urls.length} imagens candidatas encontradas`);
 
         let uploaded = 0;
-        for (let i = 0; i < urls.length; i++){
+        for (let i = job.cursor.banners||0; i < urls.length; i++){
+          pause();
+          try {
           const src = urls[i];
           const filename = "banner-" + (src.split("/").pop().split("?")[0] || `img-${i}.jpg`);
           const b64 = await downloadBase64(src);
@@ -1072,26 +1083,33 @@ app.post("/api/store-import", async (req, res) => {
           const up = await uploadFileBase64(b64, filename, token, destination.shop);
           if (up) { uploaded++; log(`   ✅ ${filename}`); }
           await sleep(300);
+          } finally {job.cursor.banners=i+1;batch.complete();}
         }
+        job.completed.banners=true;
         log(`   → ${uploaded} banners salvos em Configurações > Arquivos`);
       } catch(e){
+        if(e.message==="IMPORT_CONTINUE")throw e;
         log("   ⚠️ Não consegui extrair banners: " + e.message);
+        job.completed.banners=true;
       }
     }
 
     // ==============================
     // 2) PÁGINAS
     // ==============================
-    if (options.pages){
+    if (options.pages && !job.completed.pages){
       log("\n📄 Importando páginas...");
       step(15, "Baixando páginas");
-      const pagesFound = [];
+      const pagesFound = job.cache.pages || [];
       // Muitas lojas expõem /pages.json — vale tentar
       try {
+        if(!job.cache.pages){
         const pf = await safeGet(`${base}/pages.json?limit=250`);
         if (pf.ok){
           const pd = await pf.json();
           pagesFound.push(...(pd.pages || []));
+        }
+        job.cache.pages=pagesFound;
         }
       } catch { /* silencioso */ }
 
@@ -1099,7 +1117,8 @@ app.post("/api/store-import", async (req, res) => {
       log(`   ${pagesFound.length} páginas encontradas`);
 
       let created = 0;
-      for (const p of pagesFound){
+      for (let i=job.cursor.pages||0;i<pagesFound.length;i++){
+        pause();const p=pagesFound[i];
         try {
           await restCall("POST", destination.shop, "/pages.json", token, {
             page: {
@@ -1114,8 +1133,10 @@ app.post("/api/store-import", async (req, res) => {
         } catch(e){
           log(`   ❌ ${p.title}: ${e.message.slice(0,80)}`);
         }
+        job.cursor.pages=i+1;batch.complete();
         await sleep(400);
       }
+      job.completed.pages=true;
       log(`   → ${created} páginas criadas`);
     }
 
@@ -1123,15 +1144,16 @@ app.post("/api/store-import", async (req, res) => {
     // 3) PRODUTOS
     // ==============================
     let handleToDestId = {}; // handle da origem -> id do produto criado no destino
-    if (options.products){
+    if (options.products && !job.completed.products){
       log("\n📦 Baixando produtos da origem...");
       step(25, "Baixando produtos");
-      let products = await fetchAllProducts(base, log);
+      let products = job.cache.products || await fetchAllProducts(base, log);
       log(`   Total: ${products.length} produtos`);
       if (rules.limit > 0) products = products.slice(0, rules.limit);
+      job.cache.products=products;
 
       // Mapa de duplicados (por título) na loja destino
-      const existingTitles = new Set(), existingProducts=[];
+      const existingTitles = new Set(), pendingTitles=new Set(), existingProducts=[];
       if (rules.skipDuplicates || rules.repairStock){
         log("🔍 Listando produtos já na loja destino...");
         existingProducts.push(...await restPaginated(destination.shop,"/products.json?limit=250&fields=id,title,handle,tags",token,"products"));
@@ -1139,29 +1161,29 @@ app.post("/api/store-import", async (req, res) => {
         log(`   ${existingTitles.size} títulos já existem`);
       }
 
-      log(`\n🚀 Enviando ${products.length} produtos...`);
-      let done = 0, ok = 0, skipped = 0, failed = 0;
+      log(`\n🚀 Importando em lotes de até 100 produtos, com 5 em paralelo...`);
+      let {ok=0,skipped=0,failed=0}=job.productTotals||{};
 
-      for (const src of products){
-        if(closed) break;
-        done++;
+      await runImportItems(job,"products",products,batch,async(src,i)=>{
+        const done=i+1;let reserved=false;
+        try {
         const pct = 30 + Math.floor((done / products.length) * 55);
         step(pct, `Produto ${done}/${products.length}`);
 
         if(rules.repairStock && existingTitles.has(normTitle(src.title))){
           const matches=existingProducts.filter(p=>normTitle(p.title)===normTitle(src.title)&&p.handle===src.handle&&String(p.tags||'').split(',').map(t=>t.trim()).includes(rules.tag||'store-import'));
-          if(matches.length!==1){failed++;log(`⚠️ [${done}] ${src.title}: correção ignorada; precisa de título, handle e tag de importação únicos.`);continue;}
+          if(matches.length!==1){failed++;log(`⚠️ [${done}] ${src.title}: correção ignorada; precisa de título, handle e tag de importação únicos.`);return;}
           try {
             const data=await restCall("GET",destination.shop,`/products/${matches[0].id}.json`,token);
             await setProductStock((q,v)=>gql(destination.shop,q,v,token),data.product.variants,locationId,rules.stock);
             ok++;log(`✅ [${done}] ${src.title}: estoque atualizado para ${rules.stock} por variante (produto existente).`);
           }catch(e){failed++;log(`❌ [${done}] ${src.title}: ${e.message}`);}
-          continue;
+          return;
         }
-        if (rules.skipDuplicates && existingTitles.has(normTitle(src.title))){
+        if (rules.skipDuplicates && (existingTitles.has(normTitle(src.title)) || pendingTitles.has(normTitle(src.title)))){
           skipped++;
           log(`⏭️ [${done}] ${src.title} (já existe)`);
-          continue;
+          return;
         }
 
         // monta variantes com desconto
@@ -1202,6 +1224,7 @@ app.post("/api/store-import", async (req, res) => {
         };
 
         try {
+          pendingTitles.add(normTitle(src.title));reserved=true;
           const r = await restCall("POST", destination.shop, "/products.json", token, payload);
           if (!r.product) throw new Error("resposta sem product");
           handleToDestId[src.handle] = r.product.id;
@@ -1213,7 +1236,7 @@ app.post("/api/store-import", async (req, res) => {
           } catch(e) {
             failed++;
             log(`⚠️ [${done}] ${src.title}: produto criado (ID ${r.product.id}), estoque pendente: ${e.message}. Use "Corrigir estoque dos já importados" para repetir sem duplicar.`);
-            continue;
+            return;
           }
 
           ok++;
@@ -1224,19 +1247,24 @@ app.post("/api/store-import", async (req, res) => {
           log(`❌ [${done}] ${src.title}: ${e.message.slice(0,100)}`);
         }
         await sleep(400);
-      }
+        } catch(e) {failed++;log(`❌ [${done}] ${src.title}: ${e.message}`);}
+        finally {if(reserved)pendingTitles.delete(normTitle(src.title));job.productTotals={ok,skipped,failed};}
+      });
+      job.completed.products=true;
       log(`\n   → ok: ${ok} | pulados: ${skipped} | falhas: ${failed}`);
     }
 
     // ==============================
     // 4) COLEÇÕES
     // ==============================
-    if (options.collections){
+    if (options.collections && !job.completed.collections){
       log("\n📚 Importando coleções...");
       step(88, "Coleções");
-      const cols = await fetchAllCollections(base, log);
+      const cols = job.cache.collections || await fetchAllCollections(base, log);
+      job.cache.collections=cols;
       let created = 0;
-      for (const c of cols){
+      for(let i=job.cursor.collections||0;i<cols.length;i++){
+        pause();const c=cols[i];
         try {
           // Cria como custom collection (mais compatível — smart depende de rules específicas)
           await restCall("POST", destination.shop, "/custom_collections.json", token, {
@@ -1252,19 +1280,24 @@ app.post("/api/store-import", async (req, res) => {
         } catch(e){
           log(`   ❌ ${c.title}: ${e.message.slice(0,80)}`);
         }
+        job.cursor.collections=i+1;batch.complete();
         await sleep(300);
       }
+      job.completed.collections=true;
       log(`   → ${created} coleções criadas`);
       log(`   ℹ️ Aviso: os produtos não são automaticamente ligados às coleções — vincule manualmente no admin ou use uma smart collection depois.`);
     }
 
     step(100, "Concluído");
     log("\n🎉 Importação finalizada!");
-    emit({type:"done"});
+    job.finished=true;
+    emit({type:"done",totals:job.productTotals});
   } catch(err) {
-    emit({type:"error",message:err.message});
+    if(err.message==="IMPORT_CONTINUE")emit({type:"done",continue:true,importId:job.id});
+    else emit({type:"error",message:err.message});
   }
   clearInterval(heartbeat);
+  importSessions.release(job);
   res.end();
 });
 

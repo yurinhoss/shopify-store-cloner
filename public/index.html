@@ -539,17 +539,7 @@ async function startStoreImport(){
   siProgress(0, 'Iniciando...');
 
   try {
-    const res = await fetch('/api/store-import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok){
-      const txt = await res.text();
-      siLog('💥 Erro: ' + txt.slice(0, 300));
-      return;
-    }
-    await readOperationStream(res, 'ndjson', ev => {
+    await runImportBatches(payload, ev => {
       if(ev.log)siLog(ev.log);
       if(typeof ev.pct==='number')siProgress(ev.pct,ev.step);
     });
