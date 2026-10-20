@@ -4,7 +4,7 @@
 // ============================================================
 
 import express from "express";
-import {ImportSessions, ImportBatch, runImportItems} from "./lib/import-session.js";
+import {ImportSessions, ImportBatch, runImportItems, isTemporaryImportError} from "./lib/import-session.js";
 import {cloneFiles} from "./lib/files.js";
 import {registerAccounts} from "./lib/accounts.js";
 import {registerBuilder} from "./lib/builder.js";
@@ -1007,7 +1007,7 @@ const importSessions = new ImportSessions();
 app.post("/api/store-import", async (req, res) => {
   let job;
   try { job=importSessions.acquire(req.body._accountId,req.body); }
-  catch(e) { return res.status(e.status||400).json({error:e.message}); }
+  catch(e) { return res.status(e.status||400).json({error:e.message,code:e.code,importId:e.importId,retryable:e.retryable}); }
   const batch=new ImportBatch();
   const pause=()=>{if(batch.exhausted())throw new Error("IMPORT_CONTINUE");};
   // Streaming NDJSON (uma linha JSON por evento — o cliente já lê assim)
@@ -1018,7 +1018,7 @@ app.post("/api/store-import", async (req, res) => {
   let closed=false;
   const emit = (obj) => { if(!closed) res.write(JSON.stringify(obj) + "\n"); };
   const heartbeat=setInterval(()=>emit({type:"heartbeat"}),15000);
-  res.on('close',()=>{closed=true;clearInterval(heartbeat);});
+  res.on('close',()=>{closed=true;batch.stop();clearInterval(heartbeat);});
   const log = (msg) => emit({ log: msg });
   const step = (pct, s) => {job.progress=Math.max(job.progress||0,pct);emit({pct:job.progress,step:s});};
   emit({type:"checkpoint",importId:job.id});
@@ -1294,7 +1294,7 @@ app.post("/api/store-import", async (req, res) => {
     emit({type:"done",totals:job.productTotals});
   } catch(err) {
     if(err.message==="IMPORT_CONTINUE")emit({type:"done",continue:true,importId:job.id});
-    else emit({type:"error",message:err.message});
+    else emit({type:"error",message:err.message,retryable:isTemporaryImportError(err)});
   }
   clearInterval(heartbeat);
   importSessions.release(job);

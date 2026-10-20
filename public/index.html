@@ -318,6 +318,7 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
         </div>
 
         <button class="btn btn-primary" id="btn-si-start" onclick="startStoreImport()" style="margin-top:16px"> Importar da URL</button>
+        <button class="btn" id="btn-si-pause" onclick="pauseStoreImport()" style="display:none;margin-top:12px">Pausar importação</button>
 
         <div class="progress-wrap" id="si-progress-wrap" style="display:none;margin-top:16px">
           <div class="progress-label"><span id="si-progress-step">Preparando…</span><span id="si-progress-pct">0%</span></div>
@@ -348,7 +349,7 @@ body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--t
 
 </main>
 <script src="/account.js"></script>
-<script src="/streams.js"></script>
+<script src="/streams.js?v=20261020-reconnect"></script>
 <script>
 // ============================================================
 //  ABAS — registro central
@@ -500,7 +501,11 @@ function siProgress(pct, step){
   document.getElementById('si-progress-pct').textContent = Math.round(pct) + '%';
   if (step) document.getElementById('si-progress-step').textContent = step;
 }
+let siImportController=null, siPendingImport=null;
+function pauseStoreImport(){siImportController?.abort();}
 async function startStoreImport(){
+  if(siImportController)return;
+  const resuming=Boolean(siPendingImport);
   const url = document.getElementById('si-url').value.trim();
   if (!url){ alert('Cole a URL da loja de origem'); return; }
   const destination = getStoreData('dest');
@@ -509,7 +514,8 @@ async function startStoreImport(){
     return;
   }
 
-  const payload = {
+  const payload = siPendingImport || {
+    importRequestId:crypto.randomUUID(),
     url,
     destination,
     options: {
@@ -532,23 +538,32 @@ async function startStoreImport(){
   if(!Object.values(payload.options).some(Boolean)){alert('Selecione pelo menos um conteúdo para importar.');return;}
   for(const id of ['si-discount','si-stock','si-limit'])if(!document.getElementById(id).reportValidity())return;
   const btn = document.getElementById('btn-si-start');
+  siPendingImport=payload;
+  siImportController=new AbortController();
+  document.getElementById('btn-si-pause').style.display='inline-block';
   btn.disabled = true;
   btn.textContent = '⏳ Importando...';
   document.getElementById('si-progress-wrap').style.display = 'block';
-  document.getElementById('si-log-area').innerHTML = '';
-  siProgress(0, 'Iniciando...');
+  if(!resuming){
+    document.getElementById('si-log-area').innerHTML = '';
+    siProgress(0, 'Iniciando...');
+  } else siLog('▶ Retomando a importação de onde parou...');
 
   try {
     await runImportBatches(payload, ev => {
       if(ev.log)siLog(ev.log);
       if(typeof ev.pct==='number')siProgress(ev.pct,ev.step);
-    });
+    },{signal:siImportController.signal});
+    siPendingImport=null;
     siLog('✅ Fim.');
   } catch(err){
-    siLog('💥 ' + err.message);
+    if(err.name==='AbortError')siLog('⏸️ Importação pausada. Clique em Retomar importação para continuar.');
+    else {siPendingImport=null;siLog('💥 ' + err.message);}
   } finally {
+    siImportController=null;
+    document.getElementById('btn-si-pause').style.display='none';
     btn.disabled = false;
-    btn.textContent = '🚀 Importar da URL';
+    btn.textContent = siPendingImport?'▶ Retomar importação':'🚀 Importar da URL';
   }
 }
 </script>
