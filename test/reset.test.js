@@ -77,3 +77,36 @@ test('shipping incomplete mutation response is reported as failure',async()=>{
  d.gql=async(shop,q)=>q.includes('deliveryProfileUpdate')?{}:{deliveryProfiles:{edges:[{node:{id:'p',default:true,profileLocationGroups:[{locationGroupZones:{pageInfo:{hasNextPage:false},edges:[{node:{zone:{id:'z',name:'Alemanha'}}}]}}]}}]}};
  await runReset(body({fretes:true}),(type,data)=>events.push({type,...data}),d);assert.equal(events.at(-1).hasErrors,true);
 });
+
+test('shipping reads over 100 zones per group before any deletion, with independent cursors',async()=>{
+ const d=deps(),events=[],deleted=[],reads=[];
+ const page=(prefix,start,count,hasNextPage,endCursor)=>({edges:Array.from({length:count},(_,i)=>({node:{zone:{id:prefix+(start+i),name:'Zone'}}})),pageInfo:{hasNextPage,endCursor}});
+ const group=(id,zones)=>({locationGroup:{id},locationGroupZones:zones});
+ d.gql=async(shop,q,v)=>{
+  assert.equal(shop,destination.shop);
+  if(q.includes('deliveryProfileUpdate')){
+   assert.deepEqual(reads,['a100','a200','b100']);assert.equal(v.id,'p');assert.ok(v.profile.zonesToDelete.length<=20);
+   deleted.push(...v.profile.zonesToDelete);return {deliveryProfileUpdate:{profile:{id:'p'},userErrors:[]}};
+  }
+  if(q.includes('deliveryProfiles'))return {deliveryProfiles:{edges:[{node:{id:'p',default:true,profileLocationGroups:[group('a',page('a',0,100,true,'a100')),group('b',page('b',0,100,true,'b100'))]}}]}};
+  assert.equal(deleted.length,0);reads.push(v.after);
+  const target=v.after==='a100'?group('a',page('a',100,100,true,'a200')):v.after==='a200'?group('a',page('a',200,35,false,null)):group('b',page('b',100,7,false,null));
+  return {node:{id:'p',profileLocationGroups:[group('unrelated',page('wrong',0,5,false,null)),target]}};
+ };
+ await runReset(body({fretes:true}),(type,data)=>events.push({type,...data}),d);
+ assert.equal(deleted.length,342);assert.equal(new Set(deleted).size,342);assert.ok(deleted.every(id=>!id.startsWith('wrong')));assert.equal(events.at(-1).hasErrors,false);
+});
+
+for(const failure of ['missing cursor','repeated cursor','missing group','request failure'])test('shipping pagination fails before mutations: '+failure,async()=>{
+ const d=deps(),events=[];let mutations=0;
+ const zonePage={edges:[{node:{zone:{id:'z'}}}],pageInfo:{hasNextPage:true,endCursor:failure==='missing cursor'?null:'same'}};
+ const group={locationGroup:{id:'g'},locationGroupZones:zonePage};
+ d.gql=async(shop,q)=>{
+  if(q.includes('deliveryProfileUpdate')){mutations++;throw Error('must not mutate');}
+  if(q.includes('deliveryProfiles'))return {deliveryProfiles:{edges:[{node:{id:'p',default:true,profileLocationGroups:[group]}}]}};
+  if(failure==='request failure')throw Error('network failure');
+  return {node:{id:'p',profileLocationGroups:failure==='missing group'?[]:[group]}};
+ };
+ await runReset(body({fretes:true}),(type,data)=>events.push({type,...data}),d);
+ assert.equal(mutations,0);assert.equal(events.at(-1).type,'error');
+});
